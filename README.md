@@ -145,6 +145,8 @@ Koko OS connects to 12+ external Model Context Protocol servers. Each runs as a 
 | outlookmcp.py | 3015 | Outlook/Exchange email automation |
 | WebBrowserMCP.py | 3008 | Headless web scraping & searching |
 | YoutubePublisherMCP.py | 3019 | YouTube Shorts upload pipeline |
+| **sys_monitor.py** *(mcp_servers/)* | 3055 | Detailed system stats (CPU, RAM, disk) via SSE |
+| **secret_scan_mcp.py** *(mcp_servers/)* | 9087 | Scans directories for leaked secrets, API keys & tokens |
 
 ### 🎮 Running KokoOS
 
@@ -167,6 +169,10 @@ python MemoryMCP.py            # Port 3021 - Long-Term Memory
 python outlookmcp.py           # Port 3015 - Outlook Email Automation
 python WebBrowserMCP.py        # Port 3008 - Web Scraping & Research
 python YoutubePublisherMCP.py  # Port 3019 - YouTube Publishing
+
+# MCP servers in the mcp_servers/ subfolder:
+python mcp_servers/sys_monitor.py          # Port 3055 - System stats (CPU/RAM/disk)
+python mcp_servers/secret_scan_mcp.py      # Port 9087 - Directory secret/token scanner
 
 # Main Shell (connects to all MCP servers above)
 python hermes.py               # Interactive Koko OS Terminal
