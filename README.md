@@ -62,31 +62,55 @@
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - Git installed and in PATH
 - Local LLM serving on `localhost:8080` (Qwen-35B recommended)
 - Optional: Coder LLM on `localhost:8081` (GLM-4-Flash)
 
-### Quick Start
+### 🚀 One-Click Installation (Recommended)
+
+Just double-click the install script and everything sets up automatically:
+
+**Windows:**
+```cmd
+double-click install.bat
+```
+
+**Linux/macOS:**
+```bash
+chmod +x install.sh && ./install.sh
+```
+
+The installer will:
+1. ✅ Detect your Python installation
+2. ✅ Create an isolated virtual environment (`.venv`)
+3. ✅ Install all 20+ dependencies from `requirements.txt`
+4. ✅ Download Playwright browsers for web scraping & email automation
+5. ✅ Give you step-by-step next instructions
+
+### 🔧 Manual Installation
+
+If you prefer to install manually:
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/YOUR_USERNAME/KokoOS.git
 cd KokoOS
 
-# 2. Create and configure environment file
-copy .env.example .env
+# 2. Create and activate virtual environment
+python -m venv .venv
+# Windows:     .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
 
-# 3. Edit .env with your API keys
-#    - GEMINI_API_KEY (from Google AI Studio)
-#    - TELEGRAM_BOT_TOKEN (from @BotFather)
-#    - Local LLM settings (optional)
+# 3. Configure environment
+copy .env.example .env        # Windows
+cp .env.example .env          # Linux/macOS
 
 # 4. Install dependencies
 pip install -r requirements.txt
 
-# 5. Launch Koko OS
-python hermes.py
+# 5. (Optional) Install Playwright browsers manually
+playwright install chromium
 ```
 
 ---
@@ -106,18 +130,53 @@ python hermes.py
 
 ### Active MCP Servers
 
-Koko OS connects to 12+ external Model Context Protocol servers:
+Koko OS connects to 12+ external Model Context Protocol servers. Each runs as a separate FastAPI process on its own port:
 
-| Server | Port | Function |
-|--------|------|----------|
-| CoderMCP | 3020 | Code generation & management |
-| DeepOSMCP | 3008 | Deep system operations |
-| GmailMCP | 3015 | Email automation |
-| JellyfinMCP | 5002 | Media library integration |
-| MemoryMCP | 3011 | Long-term memory management |
-| OutlookMCP | 3017 | Microsoft email access |
-| WebBrowserMCP | 3018 | Web scraping & browsing |
-| YoutubePublisherMCP | 3019 | YouTube Shorts upload |
+| Server File | Port | Function |
+|-------------|------|----------|
+| CoderMCP.py | 3020 | AI code generation & management |
+| ComfyUIAudio.py | 3018 | Audio/music synthesis via ComfyUI |
+| ComfyUIEdit.py | 3017 | Image editing via ComfyUI |
+| ComfyUIimage.py | 3011 | Image generation via ComfyUI |
+| DeepOSMCP.py | 3022 | System monitoring, process control |
+| GmailMCP.py | 3035 | Gmail API (read/send/manage) |
+| JellyfinMCP.py | 3010 | Jellyfin media library search |
+| MemoryMCP.py | 3021 | Vector memory storage & retrieval |
+| outlookmcp.py | 3015 | Outlook/Exchange email automation |
+| WebBrowserMCP.py | 3008 | Headless web scraping & searching |
+| YoutubePublisherMCP.py | 3019 | YouTube Shorts upload pipeline |
+
+### 🎮 Running KokoOS
+
+**Option 1: Full Boot (All Servers at Once)**
+```cmd
+# Windows
+boot_koko.bat
+```
+
+**Option 2: Run Individual Servers**
+```bash
+python CoderMCP.py             # Port 3020 - AI Code Assistant
+python ComfyUIAudio.py         # Port 3018 - Music Generation
+python ComfyUIEdit.py          # Port 3017 - Image Editing
+python ComfyUIimage.py         # Port 3011 - Image Generation
+python DeepOSMCP.py            # Port 3022 - System Monitor & Control
+python GmailMCP.py             # Port 3035 - Gmail Integration
+python JellyfinMCP.py          # Port 3010 - Media Library Search
+python MemoryMCP.py            # Port 3021 - Long-Term Memory
+python outlookmcp.py           # Port 3015 - Outlook Email Automation
+python WebBrowserMCP.py        # Port 3008 - Web Scraping & Research
+python YoutubePublisherMCP.py  # Port 3019 - YouTube Publishing
+
+# Main Shell (connects to all MCP servers above)
+python hermes.py               # Interactive Koko OS Terminal
+```
+
+**Option 3: Start Just the Shell**
+If your MCP servers are already running, just launch the main shell:
+```bash
+python hermes.py
+```
 
 ---
 

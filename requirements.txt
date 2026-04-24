@@ -1,0 +1,49 @@
+# ==========================================
+# KOKOOS DEPENDENCIES - Auto-Generated
+# All imports verified across ALL Python files
+# ==========================================
+
+# Core MCP Framework (All *MCP.py servers)
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Configuration & Data
+python-dotenv>=1.0.1
+pydantic>=2.5.0
+
+# HTTP Clients (Used everywhere)
+requests>=2.31.0
+httpx>=0.26.0
+
+# Google API Integrations (GmailMCP.py, YoutubePublisherMCP.py)
+google-auth-oauthlib>=1.1.0
+google-api-python-client>=2.118.0
+google-auth-httplib2>=0.2.0
+
+# AI / LLM Client (hermes.py - main brain)
+openai>=1.10.0
+
+# Audio Processing (hermes.py - voice transcription)
+faster-whisper>=1.0.0
+numpy>=1.26.0
+
+# Desktop UI Shell (hermes.py - TextTerm interface)
+textual>=0.49.0
+rich>=13.7.0
+emoji>=2.10.0
+sounddevice>=0.4.6
+
+# System Monitoring (DeepOSMCP.py)
+psutil>=5.9.0
+
+# Browser Automation (outlookmcp.py, WebBrowserMCP.py)
+playwright>=1.40.0
+
+# Document Processing (WebBrowserMCP.py - Intel dossiers)
+markdown>=3.5.0
+
+# Vector Memory (MemoryMCP.py, hermes.py optional)
+chromadb>=0.4.22
+
+# Windows Shell Utilities (hermes.py)
+pywin32>=306  # Only needed on Windows
