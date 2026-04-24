@@ -6,7 +6,7 @@ echo ===================================================
 echo.
 
 echo [1/12] Booting The Brain (Qwen 3.6 on Port 8080)...
-start "Koko Brain (8080)" llama-server -m C:\Users\gooze\.cache\huggingface\hub\models--unsloth--Qwen3.6-35B-A3B-GGUF\snapshots\9280dd353ab587157920d5bd391ada414d84e552\Qwen3.6-35B-A3B-UD-Q4_K_M.gguf -fa on --fit on --ctx-size 128000 --no-webui --jinja --no-mmap --port 8080 --host 0.0.0.0 --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.5 --repeat-penalty 1.0 
+start "Koko Brain (8080)" llama-server -m Your model here -fa on --fit on --ctx-size 128000 --no-webui --jinja --no-mmap --port 8080 --host 0.0.0.0 --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.5 --repeat-penalty 1.0 
 :: Give the GPUs 3 seconds to allocate VRAM before hammering the CPU with the rest of the servers
 timeout /t 5 >nul
 
