@@ -1,0 +1,50 @@
+# ============================
+# KOKO PROJECT - .gitignore
+# ============================
+
+# Environment & Secrets (NEVER commit these)
+.env
+.env.local
+.env.production
+*.env
+.secrets/
+credentials/
+
+# OAuth & Auth Files
+client_secrets.json
+gmail_token.json
+token.json
+oauth_token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# ComfyUI Workflow Files (may contain hardcoded paths)
+*.json
+!README.md
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# ComfyUI Output
+C:/Users/gooze/Documents/ComfyUI/output/
