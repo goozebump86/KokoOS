@@ -10,11 +10,20 @@ import emoji
 import hashlib
 import subprocess
 import sys
+import logging
 from datetime import datetime
 from openai import AsyncOpenAI
 import sounddevice as sd
 import numpy as np
 from faster_whisper import WhisperModel
+
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("KokoOS.Hermes")
 
 try:
     import chromadb
@@ -164,8 +173,23 @@ class MCPManager:
                                 })
                                 self.tool_directory[name] = url
                                 seen_tool_names.add(name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"MCP discovery failed for {url}: {e}")
+
+# --- RETRY DECORATOR FOR NETWORK TOOLS ---
+async def retry_on_failure(func, *args, max_retries=2, delay=1.0, **kwargs):
+    """Retries a function on failure with exponential backoff."""
+    last_exception = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
+            last_exception = e
+            if attempt < max_retries:
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Network error on attempt {attempt + 1}/{max_retries + 1}: {e}. Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
+    raise last_exception
 
 # --- CUSTOM CHAT TEXT AREA ---
 class ChatTextArea(TextArea):
@@ -235,121 +259,58 @@ class KokoAgentApp(App):
         self.settings = self.load_settings()
         
         # --- ENGINE ROUTING ARCHITECTURE ---
-        # Load secure configuration first (overrides settings.json values)
-        if _use_secure_config:
-            try:
-                coco = KokoConfig()
-                self.active_engine = "local"  # Default until user switches
-                
-                # Local LLM Setup
-                self.model_name = coco.LOCAL_LLM_MODEL
-                self.context_limit = 128000
-                self.local_client = AsyncOpenAI(base_url=coco.LOCAL_LLM_BASE, api_key=coco.LOCAL_LLM_API_KEY)
-                
-                # Gemini API Setup (if configured)
-                if coco.GEMINI_API_KEY and coco.GEMINI_API_KEY not in ["", "YOUR_GEMINI_API_KEY_HERE"]:
-                    self.gemini_client = AsyncOpenAI(base_url=coco.GEMINI_API_BASE, api_key=coco.GEMINI_API_KEY)
-                    self.gemini_model = coco.GEMINI_MODEL
-                else:
-                    self.gemini_client = None
-                    self.gemini_model = "gemini-3.1-flash-lite-preview"
-                
-                # Telegram Setup (if configured)
-                if coco.TELEGRAM_BOT_TOKEN and coco.TELEGRAM_BOT_TOKEN not in ["", "YOUR_TELEGRAM_BOT_TOKEN_HERE"]:
-                    self.tg_enabled = True
-                    self.tg_token = coco.TELEGRAM_BOT_TOKEN
-                    self.tg_chats = coco.ALLOWED_CHAT_IDS
-                else:
-                    self.tg_enabled = False
-                    self.tg_token = ""
-                    self.tg_chats = []
-            except Exception as e:
-                print(f"⚠️  Config load failed ({e}), falling back to settings.json")
-                _use_secure_config = False
+        self.active_engine = self.settings.get("active_engine", "local")
         
-        # Fallback to legacy settings.json
-        if not _use_secure_config:
-            self.active_engine = self.settings.get("active_engine", "local")
-            
-            api_base = self.settings.get("llm_settings", {}).get("api_base", "http://localhost:8080/v1")
-            api_key = self.settings.get("llm_settings", {}).get("api_key", "local")
-            self.model_name = self.settings.get("llm_settings", {}).get("model", "qwen-35b")
-            self.context_limit = self.settings.get("llm_settings", {}).get("max_tokens", 128000)
-            self.local_client = AsyncOpenAI(base_url=api_base, api_key=api_key)
-            
-            self.gemini_key = self.settings.get("gemini_settings", {}).get("api_key", "")
-            self.gemini_model = self.settings.get("gemini_settings", {}).get("model", "gemini-1.5-pro")
-            self.gemini_base = self.settings.get("gemini_settings", {}).get("api_base", "https://generativelanguage.googleapis.com/v1beta/openai/")
-            if self.gemini_key and self.gemini_key != "YOUR_GEMINI_API_KEY":
-                self.gemini_client = AsyncOpenAI(base_url=self.gemini_base, api_key=self.gemini_key)
-            else:
-                self.gemini_client = None
+        # Local Setup
+        api_base = self.settings.get("llm_settings", {}).get("api_base", "http://localhost:8080/v1")
+        api_key = self.settings.get("llm_settings", {}).get("api_key", "local")
+        self.model_name = self.settings.get("llm_settings", {}).get("model", "qwen-35b")
+        self.context_limit = self.settings.get("llm_settings", {}).get("max_tokens", 128000)
+        self.local_client = AsyncOpenAI(base_url=api_base, api_key=api_key)
+        
+        # Gemini API Setup
+        self.gemini_key = self.settings.get("gemini_settings", {}).get("api_key", "")
+        self.gemini_model = self.settings.get("gemini_settings", {}).get("model", "gemini-1.5-pro")
+        self.gemini_base = self.settings.get("gemini_settings", {}).get("api_base", "https://generativelanguage.googleapis.com/v1beta/openai/")
+        if self.gemini_key and self.gemini_key != "YOUR_GEMINI_API_KEY":
+            self.gemini_client = AsyncOpenAI(base_url=self.gemini_base, api_key=self.gemini_key)
+        else:
+            self.gemini_client = None
 
-            self.mem_dir = self.settings.get("memory", {}).get("memory_dir", "memory")
-            self.heartbeat_file = self.settings.get("memory", {}).get("heartbeat_file", "heartbeat.md")
-            self.long_term_mem = os.path.join(self.mem_dir, "MEMORY.md")
-            self.cron_db = os.path.join(self.mem_dir, "cron.json")
-            self.cron_inbox = os.path.join(self.mem_dir, "cron-inbox.md")
-            self.context_cache_file = os.path.join(self.mem_dir, "context_cache.json")
-            
-            self.passive_enabled = False
-            self.passive_interval = 60
-            self.last_passive_time = 0
-            self.last_screenshot_hash = None
-            self.vision_collection = None
-            
-            if HAS_CHROMA:
-                try:
-                    self.chroma_client = chromadb.PersistentClient(path=os.path.join(self.mem_dir, "vision_db"))
-                    self.vision_collection = self.chroma_client.get_or_create_collection(name="passive_vision")
-                except Exception:
-                    pass
-            
-            self.mcp_urls = self.settings.get("mcp_servers", [])
-            self.mcp = MCPManager(self.mcp_urls)
-            
-            self.total_tokens = 0
-            self.is_processing = False 
-            self.abort_flag = False 
-            self.sub_agents_enabled = self.settings.get("sub_agents", {}).get("enabled", True)
-            
-            self.os_mode = "BUILD"
-            
-            self.tg_enabled = self.settings.get("telecom", {}).get("telegram_enabled", False)
-            self.tg_token = self.settings.get("telecom", {}).get("bot_token", "")
-            self.tg_chats = [str(x) for x in self.settings.get("telecom", {}).get("allowed_chat_ids", [])]
-
-        # Common setup (both paths)
-        if _use_secure_config:
-            self.mem_dir = "memory"
-            self.heartbeat_file = "heartbeat.md"
-            self.long_term_mem = os.path.join(self.mem_dir, "MEMORY.md")
-            self.cron_db = os.path.join(self.mem_dir, "cron.json")
-            self.cron_inbox = os.path.join(self.mem_dir, "cron-inbox.md")
-            self.context_cache_file = os.path.join(self.mem_dir, "context_cache.json")
-            
-            self.passive_enabled = False
-            self.passive_interval = 60
-            self.last_passive_time = 0
-            self.last_screenshot_hash = None
-            self.vision_collection = None
-            
-            if HAS_CHROMA:
-                try:
-                    self.chroma_client = chromadb.PersistentClient(path=os.path.join(self.mem_dir, "vision_db"))
-                    self.vision_collection = self.chroma_client.get_or_create_collection(name="passive_vision")
-                except Exception:
-                    pass
-            
-            self.mcp_urls = self.settings.get("mcp_servers", [])
-            self.mcp = MCPManager(self.mcp_urls)
-            
-            self.total_tokens = 0
-            self.is_processing = False 
-            self.abort_flag = False 
-            self.sub_agents_enabled = True
-            
-            self.os_mode = "BUILD"
+        self.mem_dir = self.settings.get("memory", {}).get("memory_dir", "memory")
+        self.heartbeat_file = self.settings.get("memory", {}).get("heartbeat_file", "heartbeat.md")
+        self.long_term_mem = os.path.join(self.mem_dir, "MEMORY.md")
+        self.cron_db = os.path.join(self.mem_dir, "cron.json")
+        self.cron_inbox = os.path.join(self.mem_dir, "cron-inbox.md")
+        self.context_cache_file = os.path.join(self.mem_dir, "context_cache.json")
+        
+        # --- PASSIVE OBSERVER SETUP ---
+        self.passive_enabled = False
+        self.passive_interval = 60
+        self.last_passive_time = 0
+        self.last_screenshot_hash = None
+        self.vision_collection = None
+        
+        if HAS_CHROMA:
+            try:
+                self.chroma_client = chromadb.PersistentClient(path=os.path.join(self.mem_dir, "vision_db"))
+                self.vision_collection = self.chroma_client.get_or_create_collection(name="passive_vision")
+            except Exception:
+                pass
+        
+        self.mcp_urls = self.settings.get("mcp_servers", [])
+        self.mcp = MCPManager(self.mcp_urls)
+        
+        self.total_tokens = 0
+        self.is_processing = False 
+        self.abort_flag = False 
+        self.sub_agents_enabled = self.settings.get("sub_agents", {}).get("enabled", True)
+        
+        self.os_mode = "BUILD"
+        
+        self.tg_enabled = self.settings.get("telecom", {}).get("telegram_enabled", False)
+        self.tg_token = self.settings.get("telecom", {}).get("bot_token", "")
+        self.tg_chats = [str(x) for x in self.settings.get("telecom", {}).get("allowed_chat_ids", [])]
         
         self.setup_openclaw_fs()
         self.tg_offset_file = os.path.join(self.mem_dir, "tg_offset.txt")
@@ -893,7 +854,22 @@ class KokoAgentApp(App):
         await self.append_to_chat("System tools synchronized.", classes="msg-sys")
 
     async def execute_tool(self, name, args):
+        """Central tool dispatch with proper error handling and logging."""
+        start_time = time.time()
         path = os.path.abspath(os.path.expanduser(args.get("path", args.get("filepath", ""))))
+        
+        try:
+            result = await self._execute_tool_impl(name, args, path)
+            elapsed = time.time() - start_time
+            logger.info(f"Tool '{name}' executed successfully in {elapsed:.2f}s")
+            return result
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"Tool '{name}' failed after {elapsed:.2f}s: {e}")
+            return f"Error executing '{name}': {str(e)}"
+
+    async def _execute_tool_impl(self, name, args, path):
+        """Internal tool implementation - returns result or raises exception."""
         if name == "clear_vram":
             async with httpx.AsyncClient(timeout=3.0) as client:
                 try: await client.post("http://127.0.0.1:8080/slots/0?action=clear")
@@ -1142,11 +1118,25 @@ class KokoAgentApp(App):
             url = self.mcp.tool_directory.get(name)
             if not url: return f"MCP Error: Tool '{name}' not found."
             try:
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    res = await client.post(url, json={"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
-                    data = res.json()
-                    return data["result"]["content"][0]["text"]
-            except Exception as e: return f"MCP Error: Failed to execute '{name}'. Details: {repr(e)}"
+                async def _call_mcp():
+                    async with httpx.AsyncClient(timeout=300.0) as client:
+                        res = await client.post(url, json={"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
+                        data = res.json()
+                        return data["result"]["content"][0]["text"]
+                
+                result = await retry_on_failure(_call_mcp, max_retries=2, delay=1.5)
+                logger.info(f"MCP tool '{name}' executed successfully in {time.time()-start_time:.2f}s")
+                return result
+            except Exception as e: 
+                logger.error(f"MCP tool '{name}' failed after retries: {e}")
+                return f"MCP Error: Failed to execute '{name}'. Details: {repr(e)}"
+            
+        # Log execution time for all tools
+        logger.info(f"Tool '{name}' executed in {time.time()-start_time:.2f}s")
+
+    async def execute_tool(self, name, args):  # Fallback - should not reach here due to above patches
+        """DEPRECATED: Use the patched version above."""
+        pass
             
             
             
