@@ -3,6 +3,7 @@ import os
 import base64
 import asyncio
 import logging
+import time
 from email.message import EmailMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
@@ -12,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request as GRequest
-from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,127 +31,365 @@ SCOPES = ["https://mail.google.com/"]  # Full access to read, send, and modify e
 CLIENT_SECRETS_FILE = os.path.join(BASE_KOKO_DIR, "client_secrets.json")
 TOKEN_FILE = os.path.join(BASE_KOKO_DIR, "gmail_token.json")
 
+# Retry configuration for transient failures
+MAX_RETRIES = 3
+RETRY_DELAY = 2  # seconds between retries
+
 def get_gmail_service():
-    """Handles OAuth2 and returns the Gmail service object."""
-    if not os.path.exists(CLIENT_SECRETS_FILE):
-        raise FileNotFoundError(f"Missing {CLIENT_SECRETS_FILE}. Please ensure it exists.")
+    """Handles OAuth2 and returns the Gmail service object with error handling."""
+    try:
+        if not os.path.exists(CLIENT_SECRETS_FILE):
+            logger.error(f"Client secrets file missing: {CLIENT_SECRETS_FILE}")
+            raise FileNotFoundError(f"Missing {CLIENT_SECRETS_FILE}. Please ensure it exists.")
 
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-    
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(GRequest())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'w') as token:
-            token.write(creds.to_json())
+        creds = None
+        if os.path.exists(TOKEN_FILE):
+            try:
+                creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+                logger.info("Loaded Gmail credentials from token file")
+            except Exception as token_err:
+                logger.warning(f"Failed to load token file: {token_err}. Will re-authenticate.")
+        
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    logger.info("Refreshing expired Gmail credentials...")
+                    creds.refresh(GRequest())
+                    with open(TOKEN_FILE, 'w') as token:
+                        token.write(creds.to_json())
+                    logger.info("Credentials refreshed successfully")
+                except Exception as refresh_err:
+                    logger.warning(f"Token refresh failed: {refresh_err}. Will re-authenticate.")
+            
+            if not creds or not creds.valid:
+                try:
+                    logger.info("Starting new OAuth2 authentication flow...")
+                    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
+                    creds = flow.run_local_server(port=0)
+                    with open(TOKEN_FILE, 'w') as token:
+                        token.write(creds.to_json())
+                    logger.info("New credentials saved successfully")
+                except Exception as auth_err:
+                    logger.error(f"OAuth2 authentication failed: {auth_err}")
+                    raise RuntimeError(f"Gmail authentication failed: {str(auth_err)}")
 
-    return build("gmail", "v1", credentials=creds)
+        service = build("gmail", "v1", credentials=creds)
+        logger.info("Gmail service initialized successfully")
+        return service
+        
+    except FileNotFoundError:
+        logger.error("Gmail setup incomplete - client secrets file not found")
+        raise
+    except RuntimeError:
+        logger.error("Gmail authentication failed - check credentials")
+        raise
+    except Exception as e:
+        logger.critical(f"Unexpected error initializing Gmail service: {str(e)}")
+        raise
+
+def retry_on_failure(func, *args, max_retries=MAX_RETRIES, **kwargs):
+    """Retry decorator wrapper for transient failures."""
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except HttpError as e:
+            last_exception = e
+            if e.resp.status in [429, 500, 502, 503, 504]:  # Retry on these status codes
+                wait_time = RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                logger.warning(f"Gmail API error {e.resp.status} on attempt {attempt + 1}/{max_retries}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"Non-retryable Gmail API error: {e.resp.status}")
+                raise
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = RETRY_DELAY * (2 ** attempt)
+                logger.warning(f"Transient error on attempt {attempt + 1}/{max_retries}: {str(e)}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"All {max_retries} attempts failed: {str(e)}")
+                raise
+    if last_exception:
+        raise last_exception
 
 # --- GMAIL TOOLS ---
 
 async def function_check_unread(limit: int = 5) -> str:
-    """Fetches the latest unread emails."""
+    """Fetches the latest unread emails with retry logic."""
     try:
-        service = await asyncio.to_thread(get_gmail_service)
-        results = service.users().messages().list(userId='me', labelIds=['UNREAD'], maxResults=limit).execute()
+        if limit < 1 or limit > 100:
+            logger.warning(f"Invalid limit parameter: {limit}. Normalizing to 5.")
+            limit = 5
+            
+        logger.info(f"Fetching {limit} unread emails...")
+        
+        def _fetch_unread():
+            service = get_gmail_service()
+            results = retry_on_failure(service.users().messages().list, userId='me', labelIds=['UNREAD'], maxResults=limit).execute()
+            return results
+        
+        results = await asyncio.to_thread(_fetch_unread)
+        
+        if not results:
+            logger.info("No unread emails found")
+            return "📭 Your inbox is clear. No unread emails."
+            
         messages = results.get('messages', [])
 
         if not messages:
+            logger.info("Inbox clear - no message objects returned")
             return "📭 Your inbox is clear. No unread emails."
 
         output = "📬 **Unread Emails:**\n"
-        for msg in messages:
-            msg_data = service.users().messages().get(userId='me', id=msg['id'], format='metadata', metadataHeaders=['From', 'Subject']).execute()
-            headers = {h['name']: h['value'] for h in msg_data['payload']['headers']}
+        for i, msg in enumerate(messages):
+            try:
+                logger.info(f"Processing email {i+1}/{len(messages)} (ID: {msg['id']})")
+                
+                def _get_email():
+                    return retry_on_failure(
+                        service.users().messages().get,
+                        userId='me', 
+                        id=msg['id'], 
+                        format='metadata', 
+                        metadataHeaders=['From', 'Subject']
+                    ).execute()
+                
+                msg_data = await asyncio.to_thread(_get_email)
+                headers = {h['name']: h['value'] for h in msg_data['payload']['headers']}
+                
+                sender = headers.get('From', 'Unknown Sender')
+                subject = headers.get('Subject', 'No Subject')
+                snippet = msg_data.get('snippet', '')
+                
+                output += f"\n🆔 **ID:** `{msg['id']}`\n👤 **From:** {sender}\n🏷️ **Subject:** {subject}\n📝 **Snippet:** {snippet}...\n"
+                
+            except Exception as msg_err:
+                logger.error(f"Failed to process email {i+1}: {str(msg_err)}")
+                output += f"\n⚠️ Email {i+1}: Failed to load - {str(msg_err)}\n"
             
-            sender = headers.get('From', 'Unknown Sender')
-            subject = headers.get('Subject', 'No Subject')
-            snippet = msg_data.get('snippet', '')
-            
-            output += f"\n🆔 **ID:** `{msg['id']}`\n👤 **From:** {sender}\n🏷️ **Subject:** {subject}\n📝 **Snippet:** {snippet}...\n"
-            
+        logger.info(f"Successfully processed {len(messages)} unread emails")
         return output
+        
+    except FileNotFoundError as e:
+        logger.error(f"Gmail setup error: {str(e)}")
+        return f"❌ Gmail not configured: {str(e)}. Please set up OAuth2 credentials."
+    except RuntimeError as e:
+        logger.error(f"Gmail auth error: {str(e)}")
+        return f"❌ Authentication failed: {str(e)}. Please check your Gmail credentials."
     except Exception as e:
+        logger.critical(f"Unexpected error checking unread emails: {str(e)}")
         return f"❌ Gmail API Error (Check Unread): {str(e)}"
 
 async def function_read_full_email(email_id: str) -> str:
-    """Reads the full body of a specific email using its ID."""
+    """Reads the full body of a specific email using its ID with retry logic."""
     try:
-        service = await asyncio.to_thread(get_gmail_service)
-        message = service.users().messages().get(userId='me', id=email_id, format='full').execute()
+        if not email_id or not isinstance(email_id, str):
+            logger.warning("Read email called with empty or invalid email_id")
+            return "❌ Invalid request: Please provide a valid email ID."
         
-        # Extract headers
-        headers = {h['name']: h['value'] for h in message['payload']['headers']}
-        sender = headers.get('From', 'Unknown')
-        subject = headers.get('Subject', 'No Subject')
-        date = headers.get('Date', 'Unknown Date')
+        logger.info(f"Reading email ID: {email_id}")
+        
+        def _read_email():
+            service = get_gmail_service()
+            message = retry_on_failure(
+                service.users().messages().get,
+                userId='me', 
+                id=email_id, 
+                format='full'
+            ).execute()
+            return message
+        
+        message = await asyncio.to_thread(_read_email)
+        
+        # Extract headers with error handling
+        try:
+            headers = {h['name']: h['value'] for h in message['payload']['headers']}
+            sender = headers.get('From', 'Unknown')
+            subject = headers.get('Subject', 'No Subject')
+            date = headers.get('Date', 'Unknown Date')
+            logger.info(f"Email headers extracted: {sender} - {subject}")
+        except Exception as header_err:
+            logger.warning(f"Failed to extract email headers: {str(header_err)}")
+            sender = "Unknown"
+            subject = "Unknown Subject"
+            date = "Unknown Date"
 
-        # Decode the body
+        # Decode the body with error handling
         def get_body(payload):
-            if 'parts' in payload:
-                for part in payload['parts']:
-                    if part['mimeType'] == 'text/plain':
-                        return base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
-                    elif 'parts' in part:
-                        return get_body(part)
-            elif payload['mimeType'] == 'text/plain':
-                return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+            try:
+                if 'parts' in payload:
+                    for part in payload['parts']:
+                        if part['mimeType'] == 'text/plain':
+                            try:
+                                return base64.urlsafe_b64decode(part['body']['data']).decode('utf-8')
+                            except Exception as decode_err:
+                                logger.warning(f"Failed to decode text part: {str(decode_err)}")
+                                continue
+                        elif 'parts' in part:
+                            result = get_body(part)
+                            if result and result != "Could not extract plain text body.":
+                                return result
+                elif payload['mimeType'] == 'text/plain':
+                    try:
+                        return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                    except Exception as decode_err:
+                        logger.warning(f"Failed to decode body: {str(decode_err)}")
+            except Exception as body_err:
+                logger.warning(f"Error extracting email body: {str(body_err)}")
             return "Could not extract plain text body."
 
-        body = get_body(message['payload'])
+        try:
+            body = get_body(message['payload'])
+            if not body or body == "Could not extract plain text body.":
+                logger.warning("No plain text body found in email")
+                body = "⚠️ Could not extract text content from this email (may contain only attachments or HTML)."
+        except Exception as body_err:
+            logger.error(f"Unexpected error decoding email body: {str(body_err)}")
+            body = "⚠️ Error decoding email body."
         
-        # Mark as read
-        service.users().messages().modify(userId='me', id=email_id, body={'removeLabelIds': ['UNREAD']}).execute()
+        # Mark as read with retry logic
+        try:
+            def _mark_as_read():
+                service = get_gmail_service()
+                retry_on_failure(
+                    service.users().messages().modify,
+                    userId='me', 
+                    id=email_id, 
+                    body={'removeLabelIds': ['UNREAD']}
+                ).execute()
+            
+            await asyncio.to_thread(_mark_as_read)
+            logger.info(f"Email {email_id} marked as read")
+        except Exception as mark_err:
+            logger.warning(f"Failed to mark email as read: {str(mark_err)}")
 
         return f"📖 **Full Email Read (Marked as Read)**\n\n👤 **From:** {sender}\n🏷️ **Subject:** {subject}\n📅 **Date:** {date}\n\n**Body:**\n{body}"
+        
+    except FileNotFoundError as e:
+        logger.error(f"Gmail setup error: {str(e)}")
+        return f"❌ Gmail not configured: {str(e)}. Please set up OAuth2 credentials."
+    except RuntimeError as e:
+        logger.error(f"Gmail auth error: {str(e)}")
+        return f"❌ Authentication failed: {str(e)}. Please check your Gmail credentials."
     except Exception as e:
+        logger.critical(f"Unexpected error reading email: {str(e)}")
         return f"❌ Gmail API Error (Read Full): {str(e)}"
 
 async def function_send_gmail(to: str, subject: str, body: str) -> str:
-    """Sends a new email."""
+    """Sends a new email with validation and retry logic."""
     try:
-        service = await asyncio.to_thread(get_gmail_service)
+        # Input validation
+        if not to or not isinstance(to, str):
+            logger.warning("Send email called with invalid 'to' address")
+            return "❌ Invalid request: Please provide a valid recipient email address."
         
-        message = EmailMessage()
-        message.set_content(body)
-        message['To'] = to
-        message['From'] = 'me'
-        message['Subject'] = subject
+        if not subject or not isinstance(subject, str):
+            logger.warning("Send email called with empty subject")
+            return "❌ Invalid request: Please provide an email subject."
+        
+        if not body or not isinstance(body, str):
+            logger.warning("Send email called with empty body")
+            return "❌ Invalid request: Please provide email content."
+        
+        logger.info(f"Sending email to {to}: {subject}")
+        
+        # Create email message
+        try:
+            message = EmailMessage()
+            message.set_content(body)
+            message['To'] = to
+            message['From'] = 'me'
+            message['Subject'] = subject
 
-        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        create_message = {'raw': encoded_message}
+            encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+            create_message = {'raw': encoded_message}
+        except Exception as msg_err:
+            logger.error(f"Failed to create email message: {str(msg_err)}")
+            return f"❌ Email creation failed: {str(msg_err)}"
         
-        send_message = service.users().messages().send(userId="me", body=create_message).execute()
-        return f"✅ **Email Sent Successfully!** (Message ID: {send_message['id']})"
+        # Send with retry logic
+        def _send_email():
+            service = get_gmail_service()
+            return retry_on_failure(
+                service.users().messages().send,
+                userId="me", 
+                body=create_message
+            ).execute()
+        
+        try:
+            send_message = await asyncio.to_thread(_send_email)
+            logger.info(f"Email sent successfully to {to} (ID: {send_message['id']})")
+            return f"✅ **Email Sent Successfully!** (Message ID: {send_message['id']})"
+        except Exception as send_err:
+            logger.error(f"Failed to send email after retries: {str(send_err)}")
+            return f"❌ Gmail API Error (Send Email): {str(send_err)}"
+        
+    except FileNotFoundError as e:
+        logger.error(f"Gmail setup error: {str(e)}")
+        return f"❌ Gmail not configured: {str(e)}. Please set up OAuth2 credentials."
+    except RuntimeError as e:
+        logger.error(f"Gmail auth error: {str(e)}")
+        return f"❌ Authentication failed: {str(e)}. Please check your Gmail credentials."
     except Exception as e:
+        logger.critical(f"Unexpected error sending email: {str(e)}")
         return f"❌ Gmail API Error (Send Email): {str(e)}"
 
 async def function_bulk_delete_emails(query: str) -> str:
-    """Moves emails matching a specific Gmail search query to the Trash."""
+    """Moves emails matching a specific Gmail search query to the Trash with retry logic."""
     try:
-        service = await asyncio.to_thread(get_gmail_service)
+        # Input validation
+        if not query or not isinstance(query, str):
+            logger.warning("Bulk delete called with empty or invalid query")
+            return "❌ Invalid request: Please provide a valid Gmail search query."
         
-        # Search for messages matching the query (grabs up to 500 at a time to prevent timeout)
-        results = service.users().messages().list(userId='me', q=query, maxResults=500).execute()
-        messages = results.get('messages', [])
-
-        if not messages:
+        logger.info(f"Bulk deleting emails matching query: '{query}'")
+        
+        def _search_and_delete():
+            service = get_gmail_service()
+            
+            # Search for messages matching the query (grabs up to 500 at a time to prevent timeout)
+            results = retry_on_failure(
+                service.users().messages().list,
+                userId='me', 
+                q=query, 
+                maxResults=500
+            ).execute()
+            
+            messages = results.get('messages', [])
+            
+            if not messages:
+                return {"count": 0, "error": None}
+            
+            message_ids = [msg['id'] for msg in messages]
+            
+            # Safely move them to TRASH instead of permanently deleting them
+            retry_on_failure(
+                service.users().messages().batchModify,
+                userId='me', 
+                body={'ids': message_ids, 'addLabelIds': ['TRASH'], 'removeLabelIds': ['INBOX']}
+            ).execute()
+            
+            return {"count": len(message_ids), "error": None}
+        
+        result = await asyncio.to_thread(_search_and_delete)
+        
+        if result["count"] == 0:
+            logger.info(f"No emails found matching query: '{query}'")
             return f"📭 No emails found matching the query: '{query}'"
-
-        message_ids = [msg['id'] for msg in messages]
-
-        # Safely move them to TRASH instead of permanently deleting them
-        service.users().messages().batchModify(
-            userId='me', 
-            body={'ids': message_ids, 'addLabelIds': ['TRASH'], 'removeLabelIds': ['INBOX']}
-        ).execute()
-
-        return f"✅ Successfully moved {len(message_ids)} emails matching '{query}' to the Trash."
+        
+        logger.info(f"Successfully moved {result['count']} emails to Trash")
+        return f"✅ Successfully moved {result['count']} emails matching '{query}' to the Trash."
+        
+    except FileNotFoundError as e:
+        logger.error(f"Gmail setup error: {str(e)}")
+        return f"❌ Gmail not configured: {str(e)}. Please set up OAuth2 credentials."
+    except RuntimeError as e:
+        logger.error(f"Gmail auth error: {str(e)}")
+        return f"❌ Authentication failed: {str(e)}. Please check your Gmail credentials."
     except Exception as e:
+        logger.critical(f"Unexpected error during bulk delete: {str(e)}")
         return f"❌ Gmail API Error (Bulk Delete): {str(e)}"
 
 # --- MCP RPC LOGIC ---
