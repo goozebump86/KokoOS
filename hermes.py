@@ -1134,13 +1134,6 @@ class KokoAgentApp(App):
         # Log execution time for all tools
         logger.info(f"Tool '{name}' executed in {time.time()-start_time:.2f}s")
 
-    async def execute_tool(self, name, args):  # Fallback - should not reach here due to above patches
-        """DEPRECATED: Use the patched version above."""
-        pass
-            
-            
-            
-
     async def process_command(self, user_text, timestamp):
         parts = user_text.split()
         cmd = parts[0].lower()

@@ -48,6 +48,18 @@ def find_file(filename: str) -> str:
         if os.path.exists(path): return path
     return None
 
+# --- AUDIO DURATION HELPER (PATCHED) ---
+async def get_audio_duration(ffmpeg_exe, audio_path):
+    import re
+    process = await asyncio.create_subprocess_exec(ffmpeg_exe, "-i", audio_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, stderr = await process.communicate()
+    # Fixed Regex to catch all variations of duration formats
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", stderr.decode('utf-8', errors='ignore'))
+    if match:
+        h, m, s = match.groups()
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    return 15.0 # default fallback
+
 async def function_generate_voice_file(text: str, output_name: str = "narration.wav") -> str:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -60,56 +72,106 @@ async def function_generate_voice_file(text: str, output_name: str = "narration.
             return f"❌ Voice Server Error: {res.status_code} - {res.text}"
     except Exception as e: return f"❌ Voice connection failed: {e}"
 
-# --- 🚀 NEW: ADVANCED GPU VIDEO EFFECTS ENGINE ---
-async def function_apply_advanced_effect(image_filename: str, audio_filename: str, effect_type: str, output_name: str = "advanced_short.mp4") -> str:
-    """Applies high-end visual effects using GPU acceleration."""
-    logger.info(f"Applying {effect_type} effect to {image_filename}")
-    
-    img_path = find_file(image_filename)
+# --- 🚀 UPDATED: SLIDESHOW ENGINE WITH PERFECT TIMING ---
+async def function_create_slideshow_short(image_filenames: list, audio_filename: str, output_name: str = "slideshow_short.mp4") -> str:
+    """Creates a vertical slideshow video from multiple images, fading between them."""
+    if not isinstance(image_filenames, list) or len(image_filenames) == 0:
+        return "❌ Error: image_filenames must be a non-empty list of strings."
+        
+    ffmpeg_exe = os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
     aud_path = find_file(audio_filename)
-    if not img_path: return f"❌ Error: Could not find image file: {image_filename}"
     if not aud_path: return f"❌ Error: Could not find audio file: {audio_filename}"
     
-    out_path = os.path.join(COMFY_OUTPUT_DIR, output_name)
-    ffmpeg_exe = os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
+    valid_images = []
+    for img in image_filenames:
+        p = find_file(img)
+        if p: valid_images.append(p)
+        else: logger.warning(f"Could not find image: {img}")
+        
+    if not valid_images: return "❌ Error: No valid images found from the provided list."
     
-    # Base mapping for the image fit
+    out_path = os.path.join(COMFY_OUTPUT_DIR, output_name)
+    
+    audio_duration = await get_audio_duration(ffmpeg_exe, aud_path)
+    num_images = len(valid_images)
+    
+    # Dynamic fade duration based on pacing
+    fade_dur = 0.5 if (audio_duration / num_images) <= 2.0 else 1.0 
+    
+    # MATH FIX: Calculate exact clip length needed so FFmpeg doesn't buffer overflow
+    if num_images == 1:
+        base_duration = audio_duration
+    else:
+        base_duration = (audio_duration + (num_images - 1) * fade_dur) / num_images
+    
+    command = [ffmpeg_exe, "-y", "-i", aud_path] # Input 0
+    
+    for i, img in enumerate(valid_images):
+        # Add 1 extra second to the very last image so it doesn't end a frame early before -shortest kicks in
+        clip_dur = base_duration + 1.0 if i == num_images - 1 else base_duration
+        command.extend(["-loop", "1", "-framerate", "30", "-t", f"{clip_dur:.3f}", "-i", img])
+        
+    filter_complex = ""
+    for i in range(num_images):
+        idx = i + 1 # offset by 1 for audio
+        filter_complex += f"[{idx}:v]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=10:10,scale=1080:1920,setsar=1[bg{i}];"
+        filter_complex += f"[{idx}:v]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[fg{i}];"
+        filter_complex += f"[bg{i}][fg{i}]overlay=(W-w)/2:(H-h)/2,fps=30,format=yuv420p[v{i}];"
+        
+    if num_images == 1:
+        filter_complex += "[v0]copy[outv]"
+    else:
+        last_out = "v0"
+        for i in range(1, num_images):
+            offset = i * (base_duration - fade_dur)
+            filter_complex += f"[{last_out}][v{i}]xfade=transition=fade:duration={fade_dur}:offset={offset:.3f}[x{i}];"
+            last_out = f"x{i}"
+        filter_complex += f"[{last_out}]copy[outv]"
+        
+    command.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "0:a",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-b:v", "5M",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest", out_path
+    ])
+    
+    try:
+        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0: 
+            return f"❌ FFmpeg Error during slideshow generation: {stderr.decode('utf-8', errors='ignore')[-500:]}"
+        return f"✅ **SUCCESS!** Slideshow video created as `{output_name}` with {num_images} images."
+    except Exception as e:
+        return f"❌ Execution Error: {str(e)}"
+
+async def function_apply_advanced_effect(image_filename: str, audio_filename: str, effect_type: str, output_name: str = "advanced_short.mp4") -> str:
+    logger.info(f"Applying {effect_type} effect to {image_filename}")
+    img_path, aud_path = find_file(image_filename), find_file(audio_filename)
+    if not img_path: return f"❌ Error: Could not find image file: {image_filename}"
+    if not aud_path: return f"❌ Error: Could not find audio file: {audio_filename}"
+    out_path, ffmpeg_exe = os.path.join(COMFY_OUTPUT_DIR, output_name), os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
     base_scale = "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
 
-    if effect_type == "visualizer":
-        # Overlays a cyan audio waveform at the bottom of the screen
-        filter_complex = f"{base_scale}[bg]; [1:a]showwaves=s=1080x400:mode=cline:colors=0x00FFFF@0.8[wave]; [bg][wave]overlay=0:H-h-200[v]"
-    
-    elif effect_type == "cinematic":
-        # 35mm film grain + dark vignette edges
-        filter_complex = f"{base_scale},noise=alls=8:allf=t+u,vignette=PI/4[v]"
-        
-    elif effect_type == "cyberpunk":
-        # Heavy grain, chromatic aberration (RGB shift), boosted contrast
-        filter_complex = f"{base_scale},noise=alls=15:allf=t,rgbashift=rh=-4:bh=4,eq=contrast=1.3:saturation=1.5[v]"
-        
-    elif effect_type == "breather":
-        # The Jitter Fix: Scale to 4K, smooth sub-pixel zoom, output 1080p
-        filter_complex = "[0:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2[hires]; [hires]zoompan=z='min(1.0+in/3000,1.05)':d=3000:x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':s=1080x1920:fps=30[v]"
-    
-    else:
-        return f"❌ Error: Unknown effect type '{effect_type}'."
+    if effect_type == "visualizer": filter_complex = f"{base_scale}[bg]; [1:a]showwaves=s=1080x400:mode=cline:colors=0x00FFFF@0.8[wave]; [bg][wave]overlay=0:H-h-200[v]"
+    elif effect_type == "cinematic": filter_complex = f"{base_scale},noise=alls=8:allf=t+u,vignette=PI/4[v]"
+    elif effect_type == "cyberpunk": filter_complex = f"{base_scale},noise=alls=15:allf=t,rgbashift=rh=-4:bh=4,eq=contrast=1.3:saturation=1.5[v]"
+    elif effect_type == "breather": filter_complex = "[0:v]scale=2160:3840:force_original_aspect_ratio=decrease,pad=2160:3840:(ow-iw)/2:(oh-ih)/2[hires]; [hires]zoompan=z='min(1.0+in/3000,1.05)':d=3000:x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2':s=1080x1920:fps=30[v]"
+    else: return f"❌ Error: Unknown effect type '{effect_type}'."
 
     try:
         command = [
             ffmpeg_exe, "-y", "-loop", "1", "-framerate", "30", "-i", img_path, "-i", aud_path,
-            "-filter_complex", filter_complex,
-            "-map", "[v]", "-map", "1:a",
-            "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-b:v", "5M", # 🚀 NVIDIA GPU ACCELERATION
+            "-filter_complex", filter_complex, "-map", "[v]", "-map", "1:a",
+            "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-b:v", "5M", 
             "-c:a", "aac", "-b:a", "192k", "-shortest", out_path
         ]
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         stdout, stderr = await process.communicate()
-        if process.returncode != 0: return f"❌ FFmpeg Error: {stderr.decode()}"
+        if process.returncode != 0: return f"❌ FFmpeg Error: {stderr.decode('utf-8', errors='ignore')}"
         return f"✅ **SUCCESS!** Rendered `{output_name}` using the **{effect_type.upper()}** effect!"
     except Exception as e: return f"❌ Error: {str(e)}"
 
-# --- ORIGINAL VIDEO FUNCTIONS ---
 async def function_stitch_video(image_filename: str, audio_filename: str, output_name: str = "final_short.mp4") -> str:
     img_path, aud_path = find_file(image_filename), find_file(audio_filename)
     out_path, ffmpeg_exe = os.path.join(COMFY_OUTPUT_DIR, output_name), os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
@@ -176,6 +238,18 @@ async def handle_rpc(message: dict) -> dict:
             "result": {
                 "tools": [
                     {
+                        "name": "create_slideshow_short",
+                        "description": "Creates a vertical slideshow video from MULTIPLE images, fading between them with a blurred background, synchronized to the audio track.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "image_filenames": {"type": "array", "items": {"type": "string"}, "description": "List of image filenames (e.g., ['img1.png', 'img2.png'])"},
+                                "audio_filename": {"type": "string"},
+                                "output_name": {"type": "string", "default": "slideshow_short.mp4"}
+                            }, "required": ["image_filenames", "audio_filename"]
+                        }
+                    },
+                    {
                         "name": "apply_advanced_video_effect",
                         "description": "Applies a premium, GPU-accelerated visual effect to a static image and audio track. KOKO: Choose 'visualizer' for podcasts/audio-focus, 'cinematic' for history/documentaries, 'cyberpunk' for horror/tech, or 'breather' for a smooth, high-quality slow zoom.",
                         "inputSchema": {
@@ -200,7 +274,8 @@ async def handle_rpc(message: dict) -> dict:
         tool_name = params.get("name")
         args = params.get("arguments", {})
         
-        if tool_name == "apply_advanced_video_effect": result = await function_apply_advanced_effect(args.get("image_filename"), args.get("audio_filename"), args.get("effect_type"), args.get("output_name", "advanced_short.mp4"))
+        if tool_name == "create_slideshow_short": result = await function_create_slideshow_short(args.get("image_filenames", []), args.get("audio_filename"), args.get("output_name", "slideshow_short.mp4"))
+        elif tool_name == "apply_advanced_video_effect": result = await function_apply_advanced_effect(args.get("image_filename"), args.get("audio_filename"), args.get("effect_type"), args.get("output_name", "advanced_short.mp4"))
         elif tool_name == "generate_voice_file": result = await function_generate_voice_file(args.get("text"), args.get("output_name", "narration.wav"))
         elif tool_name == "stitch_video": result = await function_stitch_video(args.get("image_filename"), args.get("audio_filename"), args.get("output_name", "final_short.mp4"))
         elif tool_name == "create_blurred_bg_short": result = await function_create_blurred_bg_short(args.get("image_filename"), args.get("audio_filename"), args.get("output_name", "blurred_short.mp4"))
