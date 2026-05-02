@@ -6,17 +6,10 @@ import json
 import asyncio
 import logging
 from pathlib import Path
+from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-
-# Import secure configuration
-try:
-    from config import KokoConfig
-except ImportError:
-    # Fallback if config.py not available - will use defaults
-    print("Warning: config.py not found. Using default settings.")
-    pass
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,7 +26,15 @@ IGNORE_DIRS = {".git", "node_modules", "venv", "__pycache__", ".next", "dist", "
 # --- SENIOR DEV TOOLS ---
 
 def function_read_directory_tree(path: str, max_depth: int = 4) -> str:
-    """Returns a visual tree of the directory structure."""
+    """Returns a visual tree map of all files and subfolders in the given path.
+
+    Args:
+        path: Absolute or relative path to scan. Defaults to cwd if empty.
+        max_depth: Maximum directory depth to traverse (default 4).
+
+    Returns:
+        Formatted string representation of the directory tree.
+    """
     if not path:
         path = os.getcwd()
         
@@ -75,8 +76,18 @@ def function_read_directory_tree(path: str, max_depth: int = 4) -> str:
         return result[:10000] + "\n... [Tree truncated due to size]"
     return result
 
-async def function_run_terminal_command(command: str, cwd: str) -> str:
-    """Executes a terminal command and returns stdout/stderr."""
+async def function_run_terminal_command(command: str, cwd: Optional[str] = None) -> str:
+    """Executes a shell command and returns stdout/stderr output.
+
+    Args:
+        command: The command line string to execute.
+        cwd: Working directory for the command. Defaults to current working directory.
+
+    Returns:
+        Formatted string with success/failure status and command output.
+    Raises:
+        asyncio.TimeoutError: If command exceeds 60 second timeout (caught internally).
+    """
     if not cwd:
         cwd = os.getcwd()
         
@@ -117,8 +128,16 @@ async def function_run_terminal_command(command: str, cwd: str) -> str:
     except Exception as e:
         return f"❌ System Error: {str(e)}"
 
-async def function_git_commit(message: str, cwd: str) -> str:
-    """Stages all changes and commits them to Git."""
+async def function_git_commit(message: str, cwd: Optional[str] = None) -> str:
+    """Stages all changes and commits them to Git with the provided message.
+
+    Args:
+        message: Commit message summarizing the changes.
+        cwd: Directory containing the .git folder. Defaults to current working directory.
+
+    Returns:
+        Formatted string with git add and commit results.
+    """
     if not cwd:
         cwd = os.getcwd()
         
@@ -134,8 +153,17 @@ async def function_git_commit(message: str, cwd: str) -> str:
     commit_result = await function_run_terminal_command(commit_cmd, target_dir)
     return commit_result
 
-async def function_github_publish(repo_name: str, visibility: str, cwd: str) -> str:
-    """Creates a GitHub repository and pushes the local code to it."""
+async def function_github_publish(repo_name: str, visibility: str, cwd: Optional[str] = None) -> str:
+    """Creates a new GitHub repository and pushes the local code to it.
+
+    Args:
+        repo_name: Name of the new GitHub repository (no spaces).
+        visibility: Repository visibility — 'public' or 'private'. Defaults to 'private' if invalid.
+        cwd: Directory containing the .git folder. Defaults to current working directory.
+
+    Returns:
+        Formatted string with success/failure status and GitHub CLI output.
+    """
     if not cwd:
         cwd = os.getcwd()
         
@@ -164,6 +192,17 @@ async def function_github_publish(repo_name: str, visibility: str, cwd: str) -> 
 
 # --- MCP RPC LOGIC ---
 async def handle_rpc(message: dict) -> dict:
+    """Routes incoming MCP JSON-RPC messages to the appropriate tool handler.
+
+    Supports methods: initialize, tools/list, tools/call, and ping.
+    Returns standardized JSON-RPC 2.0 responses with proper error codes.
+
+    Args:
+        message: JSON-RPC message dict containing id, method, and params.
+
+    Returns:
+        JSON-RPC response dict with result or error payload.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
