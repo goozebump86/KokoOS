@@ -4,6 +4,7 @@ import base64
 import asyncio
 import logging
 import time
+from typing import Any, Callable
 from email.message import EmailMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request as GRequest
+from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 logging.basicConfig(level=logging.INFO)
@@ -35,8 +37,22 @@ TOKEN_FILE = os.path.join(BASE_KOKO_DIR, "gmail_token.json")
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds between retries
 
-def get_gmail_service():
-    """Handles OAuth2 and returns the Gmail service object with error handling."""
+def get_gmail_service() -> Any:
+    """Initialize and return a Gmail API service object.
+
+    Handles OAuth2 authentication flow including:
+    - Loading existing credentials from token file
+    - Refreshing expired tokens
+    - Initiating new OAuth2 flow if needed
+
+    Returns:
+        gmail: A Gmail API service object for making API calls.
+
+    Raises:
+        FileNotFoundError: If client_secrets.json is missing.
+        RuntimeError: If OAuth2 authentication fails.
+        Exception: For any other unexpected errors during initialization.
+    """
     try:
         if not os.path.exists(CLIENT_SECRETS_FILE):
             logger.error(f"Client secrets file missing: {CLIENT_SECRETS_FILE}")
@@ -87,8 +103,26 @@ def get_gmail_service():
         logger.critical(f"Unexpected error initializing Gmail service: {str(e)}")
         raise
 
-def retry_on_failure(func, *args, max_retries=MAX_RETRIES, **kwargs):
-    """Retry decorator wrapper for transient failures."""
+def retry_on_failure(func: Callable, *args: Any, max_retries: int = MAX_RETRIES, **kwargs: Any) -> Any:
+    """Retry a function call with exponential backoff on transient failures.
+
+    Wraps function calls and retries them if they fail with specific HTTP error codes
+    (429, 500, 502, 503, 504) or transient exceptions. Uses exponential backoff
+    starting at RETRY_DELAY seconds.
+
+    Args:
+        func: The callable function to execute.
+        *args: Positional arguments to pass to the function.
+        max_retries: Maximum number of retry attempts (default: MAX_RETRIES=3).
+        **kwargs: Keyword arguments to pass to the function.
+
+    Returns:
+        The return value of the successful function call.
+
+    Raises:
+        HttpError: If the function fails with a non-retryable HTTP error code.
+        Exception: If all retry attempts are exhausted.
+    """
     last_exception = None
     for attempt in range(max_retries):
         try:
@@ -117,7 +151,19 @@ def retry_on_failure(func, *args, max_retries=MAX_RETRIES, **kwargs):
 # --- GMAIL TOOLS ---
 
 async def function_check_unread(limit: int = 5) -> str:
-    """Fetches the latest unread emails with retry logic."""
+    """Fetch and display the latest unread emails from the user's Gmail inbox.
+
+    Retrieves up to `limit` unread messages, extracts sender, subject, and snippet
+    for each. Returns a formatted string with email details.
+
+    Args:
+        limit: Maximum number of unread emails to fetch (default: 5, max: 100).
+            Values outside 1-100 range are normalized to 5.
+
+    Returns:
+        A formatted string listing all unread emails with their ID, sender,
+        subject, and snippet. Returns an empty inbox message if none found.
+    """
     try:
         if limit < 1 or limit > 100:
             logger.warning(f"Invalid limit parameter: {limit}. Normalizing to 5.")
@@ -183,7 +229,19 @@ async def function_check_unread(limit: int = 5) -> str:
         return f"❌ Gmail API Error (Check Unread): {str(e)}"
 
 async def function_read_full_email(email_id: str) -> str:
-    """Reads the full body of a specific email using its ID with retry logic."""
+    """Read the full content of a specific email and mark it as read.
+
+    Retrieves the complete email body (handling both plain text and multipart emails),
+    extracts headers (sender, subject, date), and removes the UNREAD label.
+    Returns a formatted string with all email details.
+
+    Args:
+        email_id: The Gmail message ID of the email to read. Must be a non-empty string.
+
+    Returns:
+        A formatted string containing sender, subject, date, and full body content.
+        Returns an error message if the email_id is invalid or the email cannot be decoded.
+    """
     try:
         if not email_id or not isinstance(email_id, str):
             logger.warning("Read email called with empty or invalid email_id")
@@ -278,7 +336,20 @@ async def function_read_full_email(email_id: str) -> str:
         return f"❌ Gmail API Error (Read Full): {str(e)}"
 
 async def function_send_gmail(to: str, subject: str, body: str) -> str:
-    """Sends a new email with validation and retry logic."""
+    """Send an email to a specified recipient with full input validation.
+
+    Creates an email message with the provided recipient, subject, and body content,
+    then sends it via the Gmail API with retry logic for transient failures.
+
+    Args:
+        to: The recipient's email address. Must be a non-empty string.
+        subject: The email subject line. Must be a non-empty string.
+        body: The main content of the email. Must be a non-empty string.
+
+    Returns:
+        A confirmation message with the sent message ID on success, or an error
+        message if validation fails, the email cannot be created, or sending fails.
+    """
     try:
         # Input validation
         if not to or not isinstance(to, str):
@@ -337,7 +408,20 @@ async def function_send_gmail(to: str, subject: str, body: str) -> str:
         return f"❌ Gmail API Error (Send Email): {str(e)}"
 
 async def function_bulk_delete_emails(query: str) -> str:
-    """Moves emails matching a specific Gmail search query to the Trash with retry logic."""
+    """Move emails matching a Gmail search query to the Trash (not permanent delete).
+
+    Searches for emails using standard Gmail search operators (e.g., 'from:spammer.com',
+    'subject:promo'), then batch-moves them to TRASH label. Processes up to 500 messages
+    per request to avoid timeouts.
+
+    Args:
+        query: Standard Gmail search query string (e.g., 'from:temu.com' or 'subject:promo').
+            Must be a non-empty string.
+
+    Returns:
+        A confirmation message with the count of moved emails, or a message indicating
+        no matching emails were found. Returns an error message if the query is invalid.
+    """
     try:
         # Input validation
         if not query or not isinstance(query, str):
@@ -393,7 +477,20 @@ async def function_bulk_delete_emails(query: str) -> str:
         return f"❌ Gmail API Error (Bulk Delete): {str(e)}"
 
 # --- MCP RPC LOGIC ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: dict[str, Any]) -> dict[str, Any]:
+    """Handle MCP JSON-RPC 2.0 messages for Gmail tool calls.
+
+    Dispatches incoming RPC requests to the appropriate handler based on method name.
+    Supports initialize, tools/list, tools/call, and ping methods.
+
+    Args:
+        message: A dictionary containing the JSON-RPC request with keys 'id', 'method',
+            and optionally 'params'.
+
+    Returns:
+        A JSON-RPC response dictionary containing 'jsonrpc' version, 'id', and either
+        a 'result' or 'error' field.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -462,7 +559,15 @@ async def handle_rpc(message: dict) -> dict:
     else: return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint that provides the messages URL to MCP clients.
+
+    Sends an initial event with the /messages endpoint URL, then maintains
+    a heartbeat connection every 15 seconds.
+
+    Returns:
+        A StreamingResponse with SSE format content.
+    """
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -473,7 +578,18 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """POST endpoint for MCP JSON-RPC 2.0 messages and SSE connections.
+
+    Processes incoming JSON-RPC requests by passing them to handle_rpc().
+    Also accepts non-request POST bodies and returns a status OK response.
+
+    Args:
+        request: The FastAPI Request object containing the JSON body.
+
+    Returns:
+        A JSONResponse with either the RPC result, status ok, or an error message.
+    """
     try:
         body = await request.json()
         if "id" in body: return JSONResponse(content=await handle_rpc(body))
