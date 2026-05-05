@@ -1,6 +1,7 @@
 # filename: JellyfinMCP.py (Jellyfin Media Server Bridge running on Port 3010)
 import asyncio
 import json
+from typing import Any, Optional
 import requests
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,7 +19,11 @@ SERVER_PORT = 3010
 # --- JELLYFIN TOOLS ---
 
 async def function_get_library_stats() -> str:
-    """Pulls total counts for movies, shows, episodes, and songs."""
+    """Gets the total count of movies, TV shows, episodes, and songs on the Jellyfin server.
+
+    Returns:
+        str: Formatted string with library statistics including movie, series, episode, song, and album counts.
+    """
     url = f"{JELLYFIN_URL}/Items/Counts"
     params = {'api_key': JELLYFIN_API_KEY}
     
@@ -39,8 +44,16 @@ async def function_get_library_stats() -> str:
     except Exception as e:
         return f"❌ Jellyfin API Error (Stats): {str(e)}"
 
-async def function_get_latest_media(item_type: str = "Movie,Series", limit: int = 5) -> str:
-    """Pulls the most recently added media to the server."""
+async def function_get_latest_media(item_type: Optional[str] = "Movie,Series", limit: Optional[int] = 5) -> str:
+    """Pulls a list of the most recently added media to the Jellyfin server.
+
+    Args:
+        item_type (str, optional): Type of media to check. Accepts 'Movie', 'Series', or 'Movie,Series'. Defaults to 'Movie,Series'.
+        limit (int, optional): Number of recent items to return. Defaults to 5.
+
+    Returns:
+        str: Formatted string listing the most recently added media items with name, year, type, and genres.
+    """
     url = f"{JELLYFIN_URL}/Items"
     params = {
         'api_key': JELLYFIN_API_KEY,
@@ -71,8 +84,16 @@ async def function_get_latest_media(item_type: str = "Movie,Series", limit: int 
     except Exception as e:
         return f"❌ Jellyfin API Error (Latest): {str(e)}"
 
-async def function_search_media(query: str, limit: int = 5) -> str:
-    """Searches Jellyfin library for movies, shows, audio, or genres."""
+async def function_search_media(query: Optional[str], limit: Optional[int] = 5) -> str:
+    """Searches the user's local Jellyfin media server for movies, shows, audio, or genres. Returns download links.
+
+    Args:
+        query (str): The name, genre, or keyword to search for.
+        limit (int, optional): Max results to return. Defaults to 5.
+
+    Returns:
+        str: Formatted string with search results including item names, years, types, overviews, poster URLs, and download links.
+    """
     url = f"{JELLYFIN_URL}/Items"
     params = {
         'api_key': JELLYFIN_API_KEY,
@@ -115,7 +136,18 @@ async def function_search_media(query: str, limit: int = 5) -> str:
 
 # --- MCP RPC LOGIC ---
 @app.post("/messages")
-async def handle_rpc(request: Request):
+async def handle_rpc(request: Request) -> JSONResponse:
+    """Handles incoming RPC requests for the Jellyfin MCP server.
+
+    Routes 'initialize', 'tools/list', and 'tools/call' methods to their respective handlers.
+    Returns JSON-RPC 2.0 compliant responses.
+
+    Args:
+        request (Request): FastAPI request object containing the JSON-RPC payload.
+
+    Returns:
+        JSONResponse: JSON-RPC 2.0 response with result or error details.
+    """
     body = await request.json()
     method = body.get("method")
     

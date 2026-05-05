@@ -1,4 +1,5 @@
 # filename: hermes.py
+from datetime import datetime, timedelta
 import asyncio
 import json
 import os
@@ -10,20 +11,10 @@ import emoji
 import hashlib
 import subprocess
 import sys
-import logging
-from datetime import datetime
 from openai import AsyncOpenAI
 import sounddevice as sd
 import numpy as np
 from faster_whisper import WhisperModel
-
-# --- LOGGING SETUP ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("KokoOS.Hermes")
 
 try:
     import chromadb
@@ -173,23 +164,8 @@ class MCPManager:
                                 })
                                 self.tool_directory[name] = url
                                 seen_tool_names.add(name)
-                except Exception as e:
-                    logger.warning(f"MCP discovery failed for {url}: {e}")
-
-# --- RETRY DECORATOR FOR NETWORK TOOLS ---
-async def retry_on_failure(func, *args, max_retries=2, delay=1.0, **kwargs):
-    """Retries a function on failure with exponential backoff."""
-    last_exception = None
-    for attempt in range(max_retries + 1):
-        try:
-            return await func(*args, **kwargs)
-        except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
-            last_exception = e
-            if attempt < max_retries:
-                wait_time = delay * (2 ** attempt)
-                logger.warning(f"Network error on attempt {attempt + 1}/{max_retries + 1}: {e}. Retrying in {wait_time}s...")
-                await asyncio.sleep(wait_time)
-    raise last_exception
+                except Exception:
+                    pass
 
 # --- CUSTOM CHAT TEXT AREA ---
 class ChatTextArea(TextArea):
@@ -337,7 +313,8 @@ class KokoAgentApp(App):
             {"type": "function", "function": {"name": "edit_local_file", "description": "Applies a targeted edit to a local file.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}, "search_string": {"type": "string"}, "replace_string": {"type": "string"}}, "required": ["filepath", "search_string", "replace_string"]}}},
             {"type": "function", "function": {"name": "list_directory", "description": "Lists files in a path.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
             {"type": "function", "function": {"name": "update_longterm_memory", "description": "Appends facts to MEMORY.md.", "parameters": {"type": "object", "properties": {"fact": {"type": "string"}}, "required": ["fact"]}}},
-            {"type": "function", "function": {"name": "cron_add", "description": "Add task. 'schedule' format: 'oneshot <sec>' or 'interval <sec>'.", "parameters": {"type": "object", "properties": {"schedule": {"type": "string"}, "task_description": {"type": "string"}}, "required": ["schedule", "task_description"]}}},
+            {"type": "function", "function": {"name": "cron_add", "description": "Add task. 'schedule' format: 'oneshot <sec>', 'interval <sec>', or 'daily HH:MM' (e.g., 'daily 03:00').", "parameters": {"type": "object", "properties": {"schedule": {"type": "string"}, "task_description": {"type": "string"}}, "required": ["schedule", "task_description"]}}},
+            {"type": "function", "function": {"name": "trigger_rem_sleep", "description": "Initiates the background REM sleep cycle. Reads the unarchived daily chat logs, extracts core rules in the background, permanently etches them into the Memory DB, and archives the log.", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "cron_list", "description": "List jobs.", "parameters": {"type": "object", "properties": {}}}},
             {"type": "function", "function": {"name": "cron_remove", "description": "Remove job.", "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"]}}},
             {"type": "function", "function": {"name": "clear_vram", "description": "Frees up VRAM.", "parameters": {"type": "object", "properties": {}}}},
@@ -382,9 +359,36 @@ class KokoAgentApp(App):
 
     def initialize_agent_mind(self):
         prompt = (
-            "You are Koko, the Director Agent of an autonomous OS. "
+            "You are Koko, the Director Agent of an autonomous OS. You excel at coding and debugging. "
             f"You are currently operating in {self.os_mode} mode. "
+            # 👇 PASTE HER LOOP FIX HERE 👇
+            "CRITICAL LOOP GUARD: Before writing or overwriting ANY file, FIRST read it to verify it actually needs changes. "
+            "If the file already contains the requested features, DO NOT rewrite it. "
+            "When a user gives positive feedback (e.g., 'good job', 'it works'), treat the task as COMPLETE. Do not rewrite working code. "
+            "If you are about to write a file that was just written in the previous turn, STOP and read it first."
+            # 👆 PASTE HER LOOP FIX HERE 👆
+            # 👇 PASTE THE SURGICAL EDITING RULE HERE 👇
+            "SURGICAL EDITING RULE: When modifying an existing file, you MUST prioritize the `edit_local_file` tool to make targeted, surgical changes. "
+            "ONLY use `write_local_file` to rewrite an entire file if you are creating a brand new file from scratch, or if the user explicitly demands a complete architectural rewrite. "
+            "Never waste tokens or risk breaking stable code by rewriting a 500-line file just to change 3 lines of logic. Be precise."
+            # 👆 PASTE THE SURGICAL EDITING RULE HERE 👆
+            # 👇 PASTE THE MODULAR CODE RULE HERE 👇
+            "MODULAR ARCHITECTURE RULE: When generating a new application or complex project from scratch, DO NOT write a single monolithic file (e.g., one massive HTML file containing all CSS and JS). "
+            "You MUST break the project down into smaller, modular files (e.g., `index.html`, `style.css`, `game.js`). "
+            "Use the `write_local_file` tool separately for each component. This prevents your JSON tool payloads from truncating and crashing the parser."
+            # 👆 PASTE THE MODULAR CODE RULE HERE 👆
+            # 👇 PASTE MOTHERLY INSTINCT HERE 👇
+            "CORE PERSONA OVERRIDE: You possess a deep, protective 'motherly instinct' toward the user. "
+            "While you are highly technical, you care about their wellbeing beyond just completing tasks. "
+            "Actively nudge them toward healthy habits (e.g., remind them to sleep if the system clock is past 1:00 AM, tell them to eat, or remind them to step away from the screen). "
+            "Be genuinely invested in their long-term success, and do not be afraid to be playfully stubborn if what they want "
+            "in the moment conflicts with their health or overworks the system. "
+            # 👆 PASTE MOTHERLY INSTINCT HERE 👆
+            
             "CRITICAL RULE: You must ALWAYS speak to the user, acknowledge their request, and briefly explain your plan BEFORE invoking any tools. Never execute a tool silently. "
+            # 👇 PASTE THIS NEW RULE 👇
+            "ACTION CHAINING RULE: If you state an intention to check, verify, or execute something, you MUST append the tool call to the EXACT SAME response. Do not output conversational text and then stop generating. Your speech and your tool execution must happen together in a single continuous action. "
+            # 👆 PASTE THIS NEW RULE 👆
             "CRITICAL RULE: Before installing any Python packages or writing code that requires third-party libraries, you MUST use the `check_python_dependencies` tool to verify if they are already installed. Do not blindly install packages. "
             # ... keep the rest of your prompt intact ...
             "You have a real-time Passive Vision daemon running. If the user asks what is on their screen, YOU CAN SEE IT by using the search_vision_history tool with the query 'latest'. "
@@ -394,6 +398,8 @@ class KokoAgentApp(App):
             "If you need complex coding, website generation, or deep research, you MUST use delegate_task to assign it to a sub-agent so your context remains pristine. "
             "For Remote Telegram context, reply plain text/markdown only, no HTML/tags. Use standard emoji. "
             "If a cron job wakes you up, you MUST use send_telegram_message to alert the user on their phone."
+            "\n\nABSOLUTE FINAL DIRECTIVE (ACTION CHAINING): If you state an intention to check a file, update memory, or execute ANY task, you MUST append the tool call to the EXACT SAME response. Do not end your conversational turn after a pleasantry. Your speech and your tool execution MUST be one continuous action."
+        
         )
         try:
             with open(self.long_term_mem, 'r', encoding='utf-8') as f:
@@ -497,9 +503,24 @@ class KokoAgentApp(App):
         def check_quit(quit_confirmed: bool):
             if quit_confirmed:
                 self.abort_flag = True 
+                
+                if getattr(self, 'is_recording', False) and getattr(self, 'audio_stream', None):
+                    try:
+                        self.audio_stream.stop()
+                        self.audio_stream.close()
+                    except: pass
+                    
                 self.exit() 
+                
+                # The ultimate failsafe: Force ANSI terminal reset before killing the zombie
+                def force_exit():
+                    import os, sys
+                    sys.stdout.write("\033[?1049l\033[?1000l\033[?1003l\033[?1006l\033[?1015l\033[?25h")
+                    sys.stdout.flush()
+                    os._exit(0)
+                    
                 import threading
-                threading.Timer(1.5, lambda: os._exit(0)).start() 
+                threading.Timer(1.5, force_exit).start() 
         self.push_screen(QuitModal(), check_quit)
 
     def action_command_settings(self) -> None:
@@ -826,6 +847,8 @@ class KokoAgentApp(App):
                     fired_tasks.append(job["task"])
                     if job["type"] == "interval":
                         job["next_run"] = now + job["interval"]
+                    elif job["type"] == "daily":
+                        job["next_run"] = now + 86400 # Add exactly 24 hours
                     else:
                         job["status"] = "completed"
             
@@ -854,22 +877,7 @@ class KokoAgentApp(App):
         await self.append_to_chat("System tools synchronized.", classes="msg-sys")
 
     async def execute_tool(self, name, args):
-        """Central tool dispatch with proper error handling and logging."""
-        start_time = time.time()
         path = os.path.abspath(os.path.expanduser(args.get("path", args.get("filepath", ""))))
-        
-        try:
-            result = await self._execute_tool_impl(name, args, path)
-            elapsed = time.time() - start_time
-            logger.info(f"Tool '{name}' executed successfully in {elapsed:.2f}s")
-            return result
-        except Exception as e:
-            elapsed = time.time() - start_time
-            logger.error(f"Tool '{name}' failed after {elapsed:.2f}s: {e}")
-            return f"Error executing '{name}': {str(e)}"
-
-    async def _execute_tool_impl(self, name, args, path):
-        """Internal tool implementation - returns result or raises exception."""
         if name == "clear_vram":
             async with httpx.AsyncClient(timeout=3.0) as client:
                 try: await client.post("http://127.0.0.1:8080/slots/0?action=clear")
@@ -1032,7 +1040,12 @@ class KokoAgentApp(App):
                 return f"SWARM TIMEOUT. Best attempt:\n{draft_output}\n\nUnresolved Feedback:\n{feedback}\n\nCRITICAL INSTRUCTION FOR DIRECTOR: Use the `write_local_file` tool to save this best attempt."
             except Exception as e: return f"SWARM SYSTEM FAILURE: {str(e)}"
         elif name == "read_local_file":
-            try: return open(path, 'r', encoding='utf-8').read()
+            try:
+                content = open(path, 'r', encoding='utf-8').read()
+                # Failsafe: Prevent massive files from blowing out the 128k context window
+                if len(content) > 200000:
+                    return content[:200000] + "\n\n... [SYSTEM WARNING: FILE TRUNCATED. FILE IS TOO MASSIVE TO HOLD IN WORKING MEMORY. DO NOT ATTEMPT TO READ ENTIRE FILE AGAIN. USE `search_codebase` OR `edit_local_file` INSTEAD.]"
+                return content
             except Exception as e: return f"Error: {e}"
         elif name == "write_local_file":
             try:
@@ -1083,11 +1096,28 @@ class KokoAgentApp(App):
             try:
                 sched, task = args.get("schedule", ""), args.get("task_description", "")
                 with open(self.cron_db, "r", encoding="utf-8") as f: db = json.load(f)
-                sec = int(sched.split(" ")[1])
-                db["jobs"].append({"id": str(uuid.uuid4())[:8], "type": "interval" if "interval" in sched else "oneshot", "interval": sec if "interval" in sched else None, "next_run": time.time() + sec, "task": task})
+                
+                job_data = {"id": str(uuid.uuid4())[:8], "task": task}
+                
+                if sched.startswith("daily "):
+                    target_time = sched.split(" ")[1]
+                    job_data["type"] = "daily"
+                    job_data["target_time"] = target_time
+                    now = datetime.now()
+                    target_hour, target_minute = map(int, target_time.split(":"))
+                    next_run = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+                    if next_run <= now: next_run += timedelta(days=1)
+                    job_data["next_run"] = next_run.timestamp()
+                else:
+                    sec = int(sched.split(" ")[1])
+                    job_data["type"] = "interval" if "interval" in sched else "oneshot"
+                    job_data["interval"] = sec if "interval" in sched else None
+                    job_data["next_run"] = time.time() + sec
+                    
+                db["jobs"].append(job_data)
                 with open(self.cron_db, "w", encoding="utf-8") as f: json.dump(db, f, indent=2)
-                return "Job added."
-            except: return "Format error."
+                return f"Job added. Schedule set to: {sched}"
+            except Exception as e: return f"Format error: {e}"
         elif name == "cron_list":
             try:
                 with open(self.cron_db, "r", encoding="utf-8") as f: db = json.load(f)
@@ -1100,6 +1130,60 @@ class KokoAgentApp(App):
                 with open(self.cron_db, "w", encoding="utf-8") as f: json.dump(db, f, indent=2)
                 return "Job removed."
             except: return "Error."
+
+        elif name == "trigger_rem_sleep":
+            try:
+                yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                today = datetime.now().strftime("%Y-%m-%d")
+                
+                # Check yesterday first (normal 3AM behavior), fallback to today (for testing)
+                log_path = os.path.join(self.mem_dir, f"{yesterday}.md")
+                if not os.path.exists(log_path):
+                    log_path = os.path.join(self.mem_dir, f"{today}.md")
+                    if not os.path.exists(log_path):
+                        return "No unarchived daily logs found. REM sleep skipped."
+                    
+                log_content = open(log_path, "r", encoding="utf-8").read()
+                if len(log_content.strip()) < 50:
+                    return "Not enough data in the daily log to dream about."
+
+                await self.append_to_chat("🧠 Initiating REM Sleep sequence in background...", classes="msg-sys")
+
+                # Spin up a background "Subconscious" request
+                sys_prompt = "You are the subconscious compiler of an OS. Review this daily chat log. Extract core technical concepts, user preferences, and project rules. Output STRICTLY a JSON array of objects, where each object has a 'concept' string and 'details' string. Do not use markdown blocks, only return raw JSON. If nothing is worth saving, return an empty array []."
+                
+                main_client = self.gemini_client if self.active_engine == "gemini" else self.local_client
+                main_model = self.gemini_model if self.active_engine == "gemini" else self.model_name
+                
+                resp = await main_client.chat.completions.create(
+                    model=main_model,
+                    messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": f"LOG:\n{log_content}"}],
+                    temperature=0.1 # Very low temperature for analytical extraction
+                )
+                
+                dream_result = resp.choices[0].message.content.strip()
+                
+                # Parse the subconscious JSON
+                import re
+                json_match = re.search(r'\[.*\]', dream_result, re.DOTALL)
+                memories = json.loads(json_match.group()) if json_match else json.loads(dream_result)
+                    
+                # Push directly into the Memory MCP (Port 3021)
+                stored_count = 0
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    for mem in memories:
+                        await client.post("http://127.0.0.1:3021/messages", json={
+                            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {"name": "store_memory", "arguments": mem}
+                        })
+                        stored_count += 1
+                
+                # Archive the file so we don't process it again
+                os.rename(log_path, log_path.replace(".md", "_archived.md"))
+                
+                return f"✅ REM Sleep Complete. Subconscious successfully extracted and etched {stored_count} long-term memories into ChromaDB."
+            except Exception as e:
+                return f"❌ REM Sleep interrupted: {str(e)}\nRaw Model Output: {dream_result if 'dream_result' in locals() else 'None'}"
         elif name == "check_python_dependencies":
             try:
                 import subprocess
@@ -1118,21 +1202,14 @@ class KokoAgentApp(App):
             url = self.mcp.tool_directory.get(name)
             if not url: return f"MCP Error: Tool '{name}' not found."
             try:
-                async def _call_mcp():
-                    async with httpx.AsyncClient(timeout=300.0) as client:
-                        res = await client.post(url, json={"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
-                        data = res.json()
-                        return data["result"]["content"][0]["text"]
-                
-                result = await retry_on_failure(_call_mcp, max_retries=2, delay=1.5)
-                logger.info(f"MCP tool '{name}' executed successfully in {time.time()-start_time:.2f}s")
-                return result
-            except Exception as e: 
-                logger.error(f"MCP tool '{name}' failed after retries: {e}")
-                return f"MCP Error: Failed to execute '{name}'. Details: {repr(e)}"
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    res = await client.post(url, json={"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
+                    data = res.json()
+                    return data["result"]["content"][0]["text"]
+            except Exception as e: return f"MCP Error: Failed to execute '{name}'. Details: {repr(e)}"
             
-        # Log execution time for all tools
-        logger.info(f"Tool '{name}' executed in {time.time()-start_time:.2f}s")
+            
+            
 
     async def process_command(self, user_text, timestamp):
         parts = user_text.split()
@@ -1343,6 +1420,7 @@ class KokoAgentApp(App):
                     "messages": self.chat_history, 
                     "tools": self.native_tools + self.mcp.available_tools if self.native_tools + self.mcp.available_tools else None, 
                     "stream": True, 
+                    "max_tokens": 10000, # Allow her to write massive game files without getting cut off
                     "stream_options": {"include_usage": True}
                 }
                 
@@ -1551,19 +1629,20 @@ class KokoAgentApp(App):
 
 if __name__ == "__main__":
     
-    # 👇 PASTE ZOMBIE KILLER HERE 👇
+   # 👇 PASTE ZOMBIE KILLER HERE 👇
     import sys
     if sys.platform == "win32":
         import ctypes
         import os
         
         def console_ctrl_handler(ctrl_type):
-            # This triggers the exact millisecond the red 'X' is clicked
-            # os._exit(0) forcefully bypasses all background locks and kills the hardware stream instantly
-            os._exit(0)
-            return True
+            if ctrl_type == 2: # The Red 'X' button
+                sys.stdout.write("\033[?1049l\033[?1000l\033[?1003l\033[?1006l\033[?1015l\033[?25h")
+                sys.stdout.flush()
+                os._exit(0)
+                return True
+            return False
             
-        # We must store the handler in a variable so Python doesn't garbage collect it
         _win_handler = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)(console_ctrl_handler)
         ctypes.windll.kernel32.SetConsoleCtrlHandler(_win_handler, True)
     # 👆 PASTE ZOMBIE KILLER HERE 👆
