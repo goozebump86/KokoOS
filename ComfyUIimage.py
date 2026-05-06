@@ -8,6 +8,7 @@ import logging
 import os
 import glob
 import time
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,7 +34,16 @@ WORKFLOW_PATH = r"C:\Users\gooze\June-ai\mcp_servers\image_z_image_turbo_api.jso
 MCP_VERSION = "2024-11-05"
 
 async def function_generate_image(prompt: str) -> str:
-    """Bypasses API completely. Watches the hard drive for the new file."""
+    """Generates an image via ComfyUI by sending a prompt to the local instance, 
+    then polling the output directory for the resulting PNG file.
+
+    Args:
+        prompt: The detailed visual description for the image to generate.
+
+    Returns:
+        A formatted string indicating success with the generated filename,
+        or an error message if generation fails or times out.
+    """
     client_id = str(uuid.uuid4())
     logger.info(f"Generating image for prompt: {prompt}")
     
@@ -108,7 +118,18 @@ async def function_generate_image(prompt: str) -> str:
             logger.warning(f"Failed to flush ComfyUI VRAM: {e}")
 
 # --- MCP RPC LOGIC ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Routes incoming MCP JSON-RPC messages to the appropriate tool handler.
+
+    Supports methods: initialize, tools/list, tools/call, and ping.
+    Returns standardized JSON-RPC 2.0 responses with proper error codes.
+
+    Args:
+        message: JSON-RPC message dict containing id, method, and params.
+
+    Returns:
+        JSON-RPC response dict with result or error payload.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -157,7 +178,8 @@ async def handle_rpc(message: dict) -> dict:
 
 # --- HTTP/SSE ROUTES ---
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint that provides the client with the messages URL and heartbeat."""
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -168,7 +190,8 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """Handles incoming MCP JSON-RPC messages or SSE events."""
     try:
         body = await request.json()
         if "id" in body:
@@ -179,7 +202,8 @@ async def post_messages(request: Request):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/")
-def read_root():
+def read_root() -> HTMLResponse:
+    """Returns a simple HTML page confirming the MCP server is running."""
     return HTMLResponse(f"<h3>ComfyUI MCP (True Folder Polling) Running on Port {SERVER_PORT}</h3>")
 
 if __name__ == "__main__":
