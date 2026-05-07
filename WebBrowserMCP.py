@@ -71,6 +71,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 # --- EXISTING TOOLS ---
 async def function_web_search(query: str, max_results: int = 5) -> str:
+    """Searches the web for current information and returns a list of links via Playwright.
+
+    Args:
+        query: The search query string to look up.
+        max_results: Maximum number of results to return (default 5).
+
+    Returns:
+        Formatted string with search results, URLs, summaries, and source block.
+    """
     global playwright_context
     page = await playwright_context.new_page()
     try:
@@ -133,6 +142,18 @@ async def function_web_search(query: str, max_results: int = 5) -> str:
         await page.close()
 
 async def function_get_directions(origin: str, destination: str) -> str:
+    """Calculates driving distance and time between two locations.
+
+    Uses Nominatim for geocoding and OSRM for route calculation.
+
+    Args:
+        origin: The starting location (address, city, etc.).
+        destination: The ending location (address, city, etc.).
+
+    Returns:
+        Formatted string with distance (miles), estimated drive time (minutes),
+        and links to Google Maps and Apple Maps directions.
+    """
     # Validate inputs first
     if not origin or not isinstance(origin, str):
         logger.warning("Get directions requested without valid origin")
@@ -221,6 +242,17 @@ async def function_get_directions(origin: str, destination: str) -> str:
         return f"❌ Route calculation failed ({error_type}): The routing service is unavailable. Please try again."
 
 async def function_get_weather(location: str) -> str:
+    """Gets the 7-day weather forecast for a given location.
+
+    Uses Nominatim for geocoding and Open-Meteo for weather data.
+
+    Args:
+        location: City name, zip code, or coordinates to get weather for.
+
+    Returns:
+        Formatted string with 7-day forecast including high/low temps and
+        a JSON payload wrapped in <weather_payload> tags for UI rendering.
+    """
     # Validate input
     if not location or not isinstance(location, str):
         logger.warning("Weather requested without valid location")
@@ -302,6 +334,17 @@ async def function_get_weather(location: str) -> str:
         return f"❌ Weather formatting error ({error_type}): Data was retrieved but could not be processed correctly."
 
 async def function_web_fetch(url: str, timeout: int = 30000) -> str:
+    """Browses a URL, bypasses bot protections, and extracts the text content.
+
+    Uses Playwright with stealth scripts to spoof browser fingerprinting.
+
+    Args:
+        url: The full URL to fetch (http:// or https://).
+        timeout: Maximum wait time in milliseconds (default 30000, max 120000).
+
+    Returns:
+        Cleaned text content from the page, truncated to 12000 characters.
+    """
     # Validate URL format before attempting fetch
     if not url or not isinstance(url, str):
         logger.warning("Web fetch requested with empty or invalid URL")
@@ -437,7 +480,18 @@ async def function_generate_intelligence_dossier(target_company: str, markdown_c
         return f"❌ Dossier Generation Error: {str(e)}"
 
 # --- MCP TOOL HANDLERS ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handles incoming JSON-RPC messages for the WebBrowser MCP server.
+
+    Routes initialize, tools/list, tools/call, and ping methods to their
+    respective handlers. Returns appropriate JSON-RPC responses.
+
+    Args:
+        message: The raw JSON-RPC request dictionary.
+
+    Returns:
+        JSON-RPC response dictionary with result or error.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -490,7 +544,8 @@ async def handle_rpc(message: dict) -> dict:
     else: return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint that provides the messages URL to MCP clients."""
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -501,7 +556,8 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """JSON-RPC message endpoint for MCP tool calls."""
     try:
         body = await request.json()
         if "id" in body: return JSONResponse(content=await handle_rpc(body))
