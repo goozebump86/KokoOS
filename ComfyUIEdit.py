@@ -8,6 +8,7 @@ import logging
 import os
 import glob
 import time
+from typing import Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,8 +37,23 @@ WORKFLOW_PATH = r"C:\Users\gooze\Downloads\image_flux2_klein_image_edit_4b_base.
 
 MCP_VERSION = "2024-11-05"
 
-async def function_edit_image(image_filename: str, prompt: str) -> str:
-    """Injects the source image and prompt into the Flux2 edit workflow."""
+async def function_edit_image(image_filename: str = None, prompt: str = None) -> str:
+    """Edits an existing image using ComfyUI's Flux2 Klein model.
+
+    Locates a source image in Telegram Downloads or ComfyUI output,
+    injects it into the edit workflow with the provided prompt,
+    and waits for the edited result to appear in the output folder.
+
+    Args:
+        image_filename: The exact filename of the source image to edit.
+                       Can be a basename (checked in Downloads/ComfyUI output)
+                       or an absolute path that exists on disk.
+        prompt: A descriptive prompt of what to change in the image.
+               Example: 'Make the car red' or 'Add a sunset background'.
+
+    Returns:
+        A string indicating success with the output filename, or an error message.
+    """
     client_id = str(uuid.uuid4())
     logger.info(f"Editing image {image_filename} with prompt: {prompt}")
     
@@ -133,7 +149,18 @@ async def function_edit_image(image_filename: str, prompt: str) -> str:
             logger.warning(f"Failed to flush ComfyUI VRAM: {e}")
 
 # --- MCP RPC LOGIC ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handles MCP RPC requests for the ComfyUI Edit server.
+
+    Routes initialize, tools/list, tools/call, and ping methods
+    to their appropriate handlers.
+
+    Args:
+        message: The incoming JSON-RPC 2.0 request dictionary.
+
+    Returns:
+        A JSON-RPC 2.0 response dictionary.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -185,7 +212,8 @@ async def handle_rpc(message: dict) -> dict:
 
 # --- HTTP/SSE ROUTES ---
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint for real-time event streaming to MCP clients."""
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -196,7 +224,8 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """Handles incoming MCP tool call messages via HTTP POST."""
     try:
         body = await request.json()
         if "id" in body:
