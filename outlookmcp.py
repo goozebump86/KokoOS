@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,13 +46,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Loc.Ai.lly Stateful Outlook MCP", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-async def clean_slate(page):
-    """Presses Escape to clear any leftover menus, popups, or selections."""
+async def clean_slate(page: Any) -> None:
+    """Presses Escape to clear any leftover menus, popups, or selections.
+
+    Args:
+        page: The Playwright page object.
+    """
     await page.keyboard.press("Escape")
     await page.keyboard.press("Escape")
     await page.wait_for_timeout(500)
 
-async def get_latest_emails_playwright(limit=5):
+async def get_latest_emails_playwright(limit: Optional[int] = 5) -> List[Dict[str, Any]]:
+    """Retrieves the latest emails from the Outlook inbox using Playwright.
+
+    Args:
+        limit: Maximum number of emails to return (default: 5).
+
+    Returns:
+        List of email dicts with 'from', 'subject', and 'preview' keys.
+    """
     page = await playwright_context.new_page()
     try:
         await page.goto("https://outlook.live.com/mail/0/inbox", wait_until="domcontentloaded")
@@ -97,7 +110,15 @@ async def get_latest_emails_playwright(limit=5):
     finally:
         await page.close()
 
-async def delete_email_playwright(subject: str):
+async def delete_email_playwright(subject: Optional[str] = None) -> str:
+    """Deletes an email from the Outlook inbox by subject line.
+
+    Args:
+        subject: The exact subject line of the email to delete.
+
+    Returns:
+        Success or error message.
+    """
     page = await playwright_context.new_page()
     try:
         await page.goto("https://outlook.live.com/mail/0/inbox", wait_until="domcontentloaded")
@@ -135,7 +156,16 @@ async def delete_email_playwright(subject: str):
     finally:
         await page.close()
 
-async def move_email_playwright(subject: str, folder: str):
+async def move_email_playwright(subject: Optional[str] = None, folder: Optional[str] = None) -> str:
+    """Moves an email to a specified folder in Outlook.
+
+    Args:
+        subject: The exact subject line of the email to move.
+        folder: The target folder name.
+
+    Returns:
+        Success or error message.
+    """
     page = await playwright_context.new_page()
     try:
         await page.goto("https://outlook.live.com/mail/0/inbox", wait_until="domcontentloaded")
@@ -193,7 +223,16 @@ async def move_email_playwright(subject: str, folder: str):
     finally:
         await page.close()
 
-async def bulk_delete_emails_playwright(latest_n: int = 0, subjects: list = None):
+async def bulk_delete_emails_playwright(latest_n: Optional[int] = 0, subjects: Optional[List[str]] = None) -> str:
+    """Bulk deletes emails from the Outlook inbox.
+
+    Args:
+        latest_n: Number of top emails to delete (default: 0).
+        subjects: List of exact subject lines to delete.
+
+    Returns:
+        Success or error message with count of deleted emails.
+    """
     page = await playwright_context.new_page()
     try:
         await page.goto("https://outlook.live.com/mail/0/inbox", wait_until="domcontentloaded")
@@ -273,7 +312,17 @@ async def bulk_delete_emails_playwright(latest_n: int = 0, subjects: list = None
         await page.close()
 
 # --- THE NEW COMPOSE EMAIL FUNCTION ---
-async def compose_email_playwright(to_email: str, subject: str, body: str):
+async def compose_email_playwright(to_email: Optional[str] = "", subject: Optional[str] = "", body: Optional[str] = "") -> str:
+    """Composes and sends an email via Outlook web interface.
+
+    Args:
+        to_email: Recipient email address.
+        subject: Email subject line.
+        body: Email body content.
+
+    Returns:
+        Success or error message.
+    """
     page = await playwright_context.new_page()
     try:
         await page.goto("https://outlook.live.com/mail/0/inbox", wait_until="domcontentloaded")
@@ -322,7 +371,15 @@ async def compose_email_playwright(to_email: str, subject: str, body: str):
     finally:
         await page.close()
 
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle MCP RPC requests - initialize, tools/list, tools/call, and ping.
+
+    Args:
+        message: The incoming RPC message dict with id, method, and params.
+
+    Returns:
+        JSON-RPC response dict.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -399,7 +456,8 @@ async def handle_rpc(message: dict) -> dict:
     else: return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 @app.post("/messages")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """Handle incoming MCP tool calls via POST requests."""
     try:
         body = await request.json()
         if "id" in body:

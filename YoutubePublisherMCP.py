@@ -6,6 +6,7 @@ import logging
 import shutil
 import subprocess
 import httpx
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +38,15 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 CLIENT_SECRETS_FILE = os.path.join(BASE_KOKO_DIR, "client_secrets.json")
 TOKEN_FILE = os.path.join(BASE_KOKO_DIR, "youtube_token.json")
 
-def find_file(filename: str) -> str:
+def find_file(filename: Optional[str] = None) -> Optional[str]:
+    """Searches multiple directories for a file and returns the full path if found.
+
+    Args:
+        filename: The filename to search for (relative or absolute path).
+
+    Returns:
+        Full file path if found, None otherwise.
+    """
     if os.path.isabs(filename) and os.path.exists(filename): return filename
     paths_to_check = [
         os.path.join(COMFY_OUTPUT_DIR, os.path.basename(filename)),
@@ -49,7 +58,16 @@ def find_file(filename: str) -> str:
     return None
 
 # --- AUDIO DURATION HELPER (PATCHED) ---
-async def get_audio_duration(ffmpeg_exe, audio_path):
+async def get_audio_duration(ffmpeg_exe: str, audio_path: str) -> float:
+    """Gets the duration of an audio file using FFmpeg.
+
+    Args:
+        ffmpeg_exe: Path to the FFmpeg executable.
+        audio_path: Path to the audio file.
+
+    Returns:
+        Duration in seconds, or 15.0 as default fallback.
+    """
     import re
     process = await asyncio.create_subprocess_exec(ffmpeg_exe, "-i", audio_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, stderr = await process.communicate()
@@ -60,7 +78,16 @@ async def get_audio_duration(ffmpeg_exe, audio_path):
         return int(h) * 3600 + int(m) * 60 + float(s)
     return 15.0 # default fallback
 
-async def function_generate_voice_file(text: str, output_name: str = "narration.wav") -> str:
+async def function_generate_voice_file(text: Optional[str] = None, output_name: Optional[str] = "narration.wav") -> str:
+    """Generates a voice file from text using the Kokoro TTS server.
+
+    Args:
+        text: The text to convert to speech.
+        output_name: Output filename (default: 'narration.wav').
+
+    Returns:
+        Success or error message.
+    """
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(VOICE_SERVER_URL, json={"text": text, "voice": "af_bella"})
@@ -73,8 +100,17 @@ async def function_generate_voice_file(text: str, output_name: str = "narration.
     except Exception as e: return f"❌ Voice connection failed: {e}"
 
 # --- 🚀 UPDATED: SLIDESHOW ENGINE WITH PERFECT TIMING ---
-async def function_create_slideshow_short(image_filenames: list, audio_filename: str, output_name: str = "slideshow_short.mp4") -> str:
-    """Creates a vertical slideshow video from multiple images, fading between them."""
+async def function_create_slideshow_short(image_filenames: Optional[List[str]] = None, audio_filename: Optional[str] = None, output_name: Optional[str] = "slideshow_short.mp4") -> str:
+    """Creates a vertical slideshow video from multiple images, fading between them.
+
+    Args:
+        image_filenames: List of image filenames to include in the slideshow.
+        audio_filename: Audio file to sync with the slideshow.
+        output_name: Output filename (default: 'slideshow_short.mp4').
+
+    Returns:
+        Success or error message with output filename.
+    """
     if not isinstance(image_filenames, list) or len(image_filenames) == 0:
         return "❌ Error: image_filenames must be a non-empty list of strings."
         
@@ -145,7 +181,18 @@ async def function_create_slideshow_short(image_filenames: list, audio_filename:
     except Exception as e:
         return f"❌ Execution Error: {str(e)}"
 
-async def function_apply_advanced_effect(image_filename: str, audio_filename: str, effect_type: str, output_name: str = "advanced_short.mp4") -> str:
+async def function_apply_advanced_effect(image_filename: Optional[str] = None, audio_filename: Optional[str] = None, effect_type: Optional[str] = None, output_name: Optional[str] = "advanced_short.mp4") -> str:
+    """Applies a premium visual effect to a static image and audio track.
+
+    Args:
+        image_filename: Source image file.
+        audio_filename: Audio file to sync with the video.
+        effect_type: Effect type - 'visualizer', 'cinematic', 'cyberpunk', or 'breather'.
+        output_name: Output filename (default: 'advanced_short.mp4').
+
+    Returns:
+        Success or error message.
+    """
     logger.info(f"Applying {effect_type} effect to {image_filename}")
     img_path, aud_path = find_file(image_filename), find_file(audio_filename)
     if not img_path: return f"❌ Error: Could not find image file: {image_filename}"
@@ -172,7 +219,17 @@ async def function_apply_advanced_effect(image_filename: str, audio_filename: st
         return f"✅ **SUCCESS!** Rendered `{output_name}` using the **{effect_type.upper()}** effect!"
     except Exception as e: return f"❌ Error: {str(e)}"
 
-async def function_stitch_video(image_filename: str, audio_filename: str, output_name: str = "final_short.mp4") -> str:
+async def function_stitch_video(image_filename: Optional[str] = None, audio_filename: Optional[str] = None, output_name: Optional[str] = "final_short.mp4") -> str:
+    """Creates a simple video from a static image and audio track.
+
+    Args:
+        image_filename: Source image file.
+        audio_filename: Audio file to include in the video.
+        output_name: Output filename (default: 'final_short.mp4').
+
+    Returns:
+        Success or error message.
+    """
     img_path, aud_path = find_file(image_filename), find_file(audio_filename)
     out_path, ffmpeg_exe = os.path.join(COMFY_OUTPUT_DIR, output_name), os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
     command = [
@@ -184,7 +241,17 @@ async def function_stitch_video(image_filename: str, audio_filename: str, output
     await process.communicate()
     return f"✅ **SUCCESS!** Video created as `{output_name}`."
 
-async def function_create_blurred_bg_short(image_filename: str, audio_filename: str, output_name: str = "blurred_short.mp4") -> str:
+async def function_create_blurred_bg_short(image_filename: Optional[str] = None, audio_filename: Optional[str] = None, output_name: Optional[str] = "blurred_short.mp4") -> str:
+    """Creates a vertical video with a blurred background from horizontal images.
+
+    Args:
+        image_filename: Source image file.
+        audio_filename: Audio file to sync with the video.
+        output_name: Output filename (default: 'blurred_short.mp4').
+
+    Returns:
+        Success or error message.
+    """
     img_path, aud_path = find_file(image_filename), find_file(audio_filename)
     out_path, ffmpeg_exe = os.path.join(COMFY_OUTPUT_DIR, output_name), os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
     command = [
@@ -196,7 +263,17 @@ async def function_create_blurred_bg_short(image_filename: str, audio_filename: 
     await process.communicate()
     return f"✅ **SUCCESS!** Blurred video created as `{output_name}`."
 
-async def function_duck_audio(bgm_filename: str, voice_filename: str, output_name: str = "ducked_audio.m4a") -> str:
+async def function_duck_audio(bgm_filename: Optional[str] = None, voice_filename: Optional[str] = None, output_name: Optional[str] = "ducked_audio.m4a") -> str:
+    """Mixes background music with voiceover, ducking the BGM during speech.
+
+    Args:
+        bgm_filename: Background music file.
+        voice_filename: Voiceover audio file.
+        output_name: Output filename (default: 'ducked_audio.m4a').
+
+    Returns:
+        Success or error message.
+    """
     bgm_path, voice_path = find_file(bgm_filename), find_file(voice_filename)
     out_path, ffmpeg_exe = os.path.join(COMFY_OUTPUT_DIR, output_name), os.path.join(BASE_KOKO_DIR, "ffmpeg.exe")
     command = [
@@ -208,7 +285,19 @@ async def function_duck_audio(bgm_filename: str, voice_filename: str, output_nam
     await process.communicate()
     return f"✅ **SUCCESS!** Audio mixed into `{output_name}`."
 
-async def function_upload_youtube(video_filename: str, title: str, description: str, tags: str, privacy_status: str = "public") -> str:
+async def function_upload_youtube(video_filename: Optional[str] = None, title: Optional[str] = None, description: Optional[str] = None, tags: Optional[str] = None, privacy_status: Optional[str] = "public") -> str:
+    """Uploads a video to YouTube using the YouTube Data API v3.
+
+    Args:
+        video_filename: Video file to upload.
+        title: Video title.
+        description: Video description.
+        tags: Comma-separated list of tags.
+        privacy_status: Privacy status - 'public', 'private', or 'unlisted'.
+
+    Returns:
+        Success message with YouTube URL or error description.
+    """
     video_path = find_file(video_filename)
     if not video_path: return f"❌ Error: Could not find video file: {video_filename}"
     creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES) if os.path.exists(TOKEN_FILE) else None
@@ -222,7 +311,15 @@ async def function_upload_youtube(video_filename: str, title: str, description: 
     return f"✅ **UPLOAD SUCCESSFUL!** Live at: https://youtu.be/{response.get('id')}"
 
 # --- MCP RPC LOGIC ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle MCP RPC requests - initialize, tools/list, tools/call, and ping.
+
+    Args:
+        message: The incoming RPC message dict with id, method, and params.
+
+    Returns:
+        JSON-RPC response dict.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -287,7 +384,8 @@ async def handle_rpc(message: dict) -> dict:
     else: return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint for streaming connection endpoints to clients."""
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -298,7 +396,8 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """Handle incoming MCP tool calls via POST requests."""
     try:
         body = await request.json()
         if "id" in body: return JSONResponse(content=await handle_rpc(body))

@@ -23,6 +23,7 @@ except ImportError:
     HAS_CHROMA = False
 
 # Textual Imports for Koko OS
+from typing import Any, Dict, List, Optional
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, Horizontal, Container, VerticalScroll
 from textual.widgets import Static, Input, TextArea, Footer, Label, Button, Header, ProgressBar
@@ -135,12 +136,22 @@ class QuitModal(ModalScreen[bool]):
 
 # --- MCP Tool Management ---
 class MCPManager:
-    def __init__(self, saved_servers=None):
+    def __init__(self, saved_servers: Optional[List[str]] = None):
+        """Initialize the MCP Manager with a list of server URLs.
+
+        Args:
+            saved_servers: List of MCP server URLs to connect to.
+        """
         self.servers = saved_servers if saved_servers else []
         self.tool_directory = {}
         self.available_tools = []
 
-    async def discover_tools(self):
+    async def discover_tools(self) -> None:
+        """Discovers available tools from all registered MCP servers.
+
+        Returns:
+            Updates self.available_tools and self.tool_directory with discovered tools.
+        """
         self.available_tools = []
         self.tool_directory = {}
         seen_tool_names = set() 
@@ -689,7 +700,16 @@ class KokoAgentApp(App):
                 await self.append_to_chat("❌ Could not hear anything or transcription failed.", classes="msg-error")
     # 👆 PASTE STEP 4 HERE 👆
 
-    async def append_to_chat(self, renderable, classes="msg-sys"):
+    async def append_to_chat(self, renderable: Any, classes: str = "msg-sys") -> Static:
+        """Appends a message to the chat log widget.
+
+        Args:
+            renderable: The text or widget to display.
+            classes: CSS class for styling (default: 'msg-sys').
+
+        Returns:
+            The created Static widget instance.
+        """
         log = self.query_one("#chat_log")
         is_user = classes == "msg-user"
         should_scroll = is_user or (log.scroll_y >= log.max_scroll_y - 3)
@@ -876,7 +896,16 @@ class KokoAgentApp(App):
         await self.mcp.discover_tools()
         await self.append_to_chat("System tools synchronized.", classes="msg-sys")
 
-    async def execute_tool(self, name, args):
+    async def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
+        """Executes a native tool or forwards to MCP server.
+
+        Args:
+            name: The tool name to execute.
+            args: Dictionary of tool arguments.
+
+        Returns:
+            Result string from tool execution.
+        """
         path = os.path.abspath(os.path.expanduser(args.get("path", args.get("filepath", ""))))
         if name == "clear_vram":
             async with httpx.AsyncClient(timeout=3.0) as client:
@@ -1376,7 +1405,14 @@ class KokoAgentApp(App):
             except Exception as e: self.write_daily_log(f"TTS Error: {e}")
             queue.task_done()
 
-    async def process_ai(self, timestamp, is_background=False, remote_context=None):
+    async def process_ai(self, timestamp: str, is_background: bool = False, remote_context: Optional[Dict[str, Any]] = None) -> None:
+        """Main AI processing loop - handles LLM calls, tool execution, and streaming responses.
+
+        Args:
+            timestamp: Current time string for logging.
+            is_background: Whether this is a background task (no UI updates).
+            remote_context: Dict with platform/chat_id for Telegram integration.
+        """
         self.is_processing = True
         log_scroll = self.query_one("#chat_log")
         

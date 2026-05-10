@@ -5,6 +5,7 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any, Dict, Optional
 import chromadb
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
@@ -36,8 +37,16 @@ except Exception as e:
 
 # --- MEMORY TOOLS ---
 
-def function_store_memory(concept: str, details: str) -> str:
-    """Etches a new memory permanently into the vector database."""
+def function_store_memory(concept: Optional[str] = None, details: Optional[str] = None) -> str:
+    """Etches a new memory permanently into the vector database.
+
+    Args:
+        concept: A short, descriptive title for this memory.
+        details: The exact code, logic, or text to be remembered forever.
+
+    Returns:
+        Success message with memory ID or error description.
+    """
     try:
         memory_id = f"mem_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
         timestamp = datetime.now().isoformat()
@@ -52,8 +61,16 @@ def function_store_memory(concept: str, details: str) -> str:
     except Exception as e:
         return f"❌ Failed to store memory: {str(e)}"
 
-def function_semantic_search(query: str, n_results: int = 3) -> str:
-    """Searches the database mathematically for the closest matching memories."""
+def function_semantic_search(query: Optional[str] = None, n_results: Optional[int] = 3) -> str:
+    """Searches the database mathematically for the closest matching memories.
+
+    Args:
+        query: The question or topic to search for.
+        n_results: Number of memories to retrieve (default: 3).
+
+    Returns:
+        Formatted string of matching memories or empty result message.
+    """
     try:
         # Failsafe if the database is empty
         if memory_collection.count() == 0:
@@ -79,7 +96,15 @@ def function_semantic_search(query: str, n_results: int = 3) -> str:
         return f"❌ Neural search failed: {str(e)}"
 
 # --- MCP RPC LOGIC ---
-async def handle_rpc(message: dict) -> dict:
+async def handle_rpc(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle MCP RPC requests - initialize, tools/list, tools/call, and ping.
+
+    Args:
+        message: The incoming RPC message dict with id, method, and params.
+
+    Returns:
+        JSON-RPC response dict.
+    """
     req_id = message.get("id")
     method = message.get("method")
     params = message.get("params", {})
@@ -139,7 +164,8 @@ async def handle_rpc(message: dict) -> dict:
     else: return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 @app.get("/sse")
-async def get_sse(request: Request):
+async def get_sse(request: Request) -> StreamingResponse:
+    """SSE endpoint for streaming connection endpoints to clients."""
     async def event_generator():
         base = str(request.base_url).rstrip('/')
         yield f"event: endpoint\ndata: {base}/messages\n\n"
@@ -150,7 +176,8 @@ async def get_sse(request: Request):
 
 @app.post("/messages")
 @app.post("/sse")
-async def post_messages(request: Request):
+async def post_messages(request: Request) -> JSONResponse:
+    """Handle incoming MCP tool calls via POST requests."""
     try:
         body = await request.json()
         if "id" in body: return JSONResponse(content=await handle_rpc(body))
@@ -158,7 +185,9 @@ async def post_messages(request: Request):
     except Exception as e: return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/")
-def read_root(): return HTMLResponse(f"<h3>Koko Memory Engine Running on Port {SERVER_PORT}</h3>")
+def read_root() -> HTMLResponse:
+    """Root endpoint showing server status."""
+    return HTMLResponse(f"<h3>Koko Memory Engine Running on Port {SERVER_PORT}</h3>")
 
 if __name__ == "__main__":
     import uvicorn
