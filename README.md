@@ -236,7 +236,8 @@ KokoOS/
 ├── boot_koko.bat             # Windows launcher script
 ├── .env.example              # Environment template
 ├── requirements.txt          # Python dependencies
-├── SECURITY.md               # Security documentation
+├── CONTRIBUTING.md           # Contributor guidelines & standards
+├── SECURITY.md               # Security policy & best practices
 └── memory/                   # LTM storage & cron database
     ├── MEMORY.md             # Long-term memory
     ├── cron.json             # Cron job database
@@ -286,13 +287,24 @@ Koko OS can autonomously generate and publish content:
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
+Contributions welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for detailed guidelines on:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+- Code style & standards (type hints, docstrings required)
+- Adding new MCP servers
+- Testing requirements
+- Pull request process
+
+---
+
+## 🔒 Security
+
+See [SECURITY.md](SECURITY.md) for:
+
+- Security architecture overview
+- Threat model
+- Credential management best practices
+- Incident response procedures
+- Vulnerability reporting process
 
 ---
 
@@ -318,12 +330,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For issues, feature requests, or questions:
 
 - Open an Issue on GitHub
-- Telegram: [@YourKokoBot](https://t.me/YourKokoBot)
+- Telegram: [@KokoOSBot](https://t.me/KokoOSBot)
 
 ---
 
 <div align="center">
 
-**Built with ❤️ by [YOUR_NAME]** | *Version 1.0.0* | © 2026 Koko OS
+**Built with ❤️ by David "goozebump86"** | *Version 1.0.0* | © 2026 Koko OS
 
 </div>
