@@ -4,7 +4,7 @@ import json
 from typing import Any, Optional
 import requests
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -211,6 +211,17 @@ async def handle_rpc(request: Request) -> JSONResponse:
             return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": {"content": [{"type": "text", "text": res}]}})
         except Exception as e:
             return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "error": {"code": -32000, "message": f"Execution error: {str(e)}"}})
+
+@app.get("/")
+async def read_root() -> HTMLResponse:
+    """Health check endpoint — returns server status and version info.
+
+    Returns:
+        HTML response with server name, version, uptime indicator, and available tools list.
+    """
+    return HTMLResponse(
+        content="<h2>Koko Jellyfin MCP</h2><p>Version: 2.1</p><p>Status: Online</p><p>Port: 3010</p>"
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)

@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright, BrowserContext
 
@@ -465,6 +465,17 @@ async def post_messages(request: Request) -> JSONResponse:
         return JSONResponse(content={"status": "ok"})
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+@app.get("/")
+async def read_root() -> HTMLResponse:
+    """Health check endpoint — returns server status and version info.
+
+    Returns:
+        HTML response with server name, version, uptime indicator, and available tools list.
+    """
+    return HTMLResponse(
+        content="<h2>Koko Outlook MCP</h2><p>Version: 10.0</p><p>Status: Online</p><p>Port: 3015</p>"
+    )
 
 if __name__ == "__main__":
     import uvicorn

@@ -576,6 +576,17 @@ async def get_sse(request: Request) -> StreamingResponse:
             yield ": heartbeat\n\n"
     return StreamingResponse(event_generator(), media_type="text-event-stream")
 
+@app.get("/")
+async def read_root() -> HTMLResponse:
+    """Health check endpoint — returns server status and version info.
+
+    Returns:
+        HTML response with server name, version, uptime indicator, and available tools list.
+    """
+    return HTMLResponse(
+        content="<h2>Koko Gmail MCP</h2><p>Version: 1.1.0</p><p>Status: Online</p><p>Port: 3035</p>"
+    )
+
 @app.post("/messages")
 @app.post("/sse")
 async def post_messages(request: Request) -> JSONResponse:

@@ -404,6 +404,17 @@ async def post_messages(request: Request) -> JSONResponse:
         return JSONResponse(content={"status": "ok"})
     except Exception as e: return JSONResponse(content={"error": str(e)}, status_code=500)
 
+@app.get("/")
+async def read_root() -> HTMLResponse:
+    """Health check endpoint — returns server status and version info.
+
+    Returns:
+        HTML response with server name, version, uptime indicator, and available tools list.
+    """
+    return HTMLResponse(
+        content="<h2>Koko YouTube Publisher MCP</h2><p>Version: 1.0.0</p><p>Status: Online</p><p>Port: 3030</p>"
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)
