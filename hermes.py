@@ -353,14 +353,20 @@ class KokoAgentApp(App):
                 }
             })
 
-    def load_settings(self):
+    def load_settings(self) -> Dict[str, Any]:
+        """Load application settings from settings.json.
+
+        Returns:
+            Dictionary of settings, or empty dict on failure.
+        """
         try:
             with open("settings.json", "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
             return {}
 
-    def setup_openclaw_fs(self):
+    def setup_openclaw_fs(self) -> None:
+        """Initialize the file system structure for Koko OS. Creates memory directory and default files if missing."""
         os.makedirs(self.mem_dir, exist_ok=True)
         for f, content in [(self.heartbeat_file, "Check cron-inbox.md."), (self.long_term_mem, "# KOKO LTM\n"), (self.cron_inbox, "")]:
             if not os.path.exists(f):
@@ -368,7 +374,11 @@ class KokoAgentApp(App):
         if not os.path.exists(self.cron_db):
             json.dump({"jobs": []}, open(self.cron_db, "w", encoding="utf-8"))
 
-    def initialize_agent_mind(self):
+    def initialize_agent_mind(self) -> None:
+        """Initialize the agent's system prompt with persona rules, loop guards, and long-term memory.
+        
+        Loads MEMORY.md content and appends it to the system prompt. Restores cached chat history.
+        """
         prompt = (
             "You are Koko, the Director Agent of an autonomous OS. You excel at coding and debugging. "
             f"You are currently operating in {self.os_mode} mode. "
@@ -428,7 +438,8 @@ class KokoAgentApp(App):
         except:
             pass
 
-    def save_context_cache(self):
+    def save_context_cache(self) -> None:
+        """Serialize chat history (minus images) to context_cache.json for persistence across restarts."""
         try:
             cache_data = []
             for msg in self.chat_history[1:]:
@@ -448,12 +459,22 @@ class KokoAgentApp(App):
         except:
             pass
 
-    def write_daily_log(self, text):
+    def write_daily_log(self, text: str) -> None:
+        """Append a timestamped entry to the current day's daily log file.
+        
+        Args:
+            text: The log message to append.
+        """
         today = datetime.now().strftime("%Y-%m-%d")
         with open(os.path.join(self.mem_dir, f"{today}.md"), "a", encoding="utf-8") as f: 
             f.write(f"\n[{datetime.now().strftime('%H:%M:%S')}] {text}")
 
     def compose(self) -> ComposeResult:
+        """Compose the main UI layout for the Koko Agent application.
+
+        Yields:
+            Textual widgets defining the application's visual structure.
+        """
         yield Static(KOKO_HEADER, id="header_logo")
         with Horizontal(id="main_layout"):
             with Vertical(id="sidebar"):
@@ -466,7 +487,17 @@ class KokoAgentApp(App):
                     yield Static(f"{self.os_mode}:", id="mode_indicator", classes="build_mode")
         yield Footer()
 
-    def get_metrics_bar(self, tokens, start_time, end_time):
+    def get_metrics_bar(self, tokens: int, start_time: float, end_time: float) -> str:
+        """Calculate and format AI processing metrics into a display string.
+        
+        Args:
+            tokens: Number of completion tokens used.
+            start_time: Start time of the processing.
+            end_time: End time of the processing.
+            
+        Returns:
+            Formatted string with token count, tokens/sec, duration, and context window usage bar.
+        """
         duration = max(0.001, end_time - start_time)
         tps = tokens / duration
         self.total_tokens += tokens
@@ -476,6 +507,7 @@ class KokoAgentApp(App):
         return f"\n\n[dim]{tokens} tkns  {tps:.1f} t/s  {duration:.2f}s  CTX: \\[[#238636]{bar}[/]] {ctx_pct:.1f}%[/]"
 
     async def on_mount(self) -> None:
+        """Called when the application is mounted. Initializes MCP servers, displays status, and starts background ticks."""
         await self.action_refresh_mcp()
         tel_status = "Syncing" if self.tg_enabled and self.tg_token else "Disabled"
         sub_status = "Active" if self.sub_agents_enabled else "Off"
@@ -508,9 +540,11 @@ class KokoAgentApp(App):
         self.query_one("#koko_input").focus()
 
     def action_abort(self) -> None:
+        """Set the abort flag to stop the current AI processing loop."""
         self.abort_flag = True
 
     def action_request_quit(self) -> None:
+        """Request application shutdown with confirmation modal."""
         def check_quit(quit_confirmed: bool):
             if quit_confirmed:
                 self.abort_flag = True 
@@ -535,9 +569,11 @@ class KokoAgentApp(App):
         self.push_screen(QuitModal(), check_quit)
 
     def action_command_settings(self) -> None:
+        """Open the settings modal for configuration changes."""
         asyncio.create_task(self.process_command("/settings", datetime.now().strftime("%I:%M %p")))
 
     def action_toggle_mode(self) -> None:
+        """Toggle between BUILD and PLAN modes. BUILD allows tool execution, PLAN is for planning only."""
         if self.os_mode == "BUILD":
             self.os_mode = "PLAN"
             self.query_one("#mode_indicator").update("PLAN:")
@@ -556,6 +592,7 @@ class KokoAgentApp(App):
             asyncio.create_task(self.append_to_chat(" > Switched to BUILD mode. Executing allowed.", classes="msg-sys"))
 
     def action_toggle_engine(self) -> None:
+        """Switch between local LLM and Gemini API engines."""
         if self.active_engine == "local":
             if not self.gemini_key or self.gemini_key == "YOUR_GEMINI_API_KEY":
                 asyncio.create_task(self.append_to_chat("❌ Cannot switch to Gemini: API Key missing in Settings (CTRL+S).", classes="msg-error"))
@@ -575,6 +612,7 @@ class KokoAgentApp(App):
         asyncio.create_task(self.append_to_chat(f"🚀 Core Engine Switched: [{self.active_engine.upper()}]", classes="msg-sys"))
 
     async def action_paste_image(self) -> None:
+        """Paste an image from clipboard for visual analysis. Captures clipboard image, encodes it, and sends to AI."""
         if self.is_processing: return
         try:
             from PIL import ImageGrab, Image
@@ -640,12 +678,20 @@ class KokoAgentApp(App):
         asyncio.create_task(self.process_ai(timestamp, is_background=False))
 
     # 👇 PASTE STEP 4 HERE 👇
-    def audio_callback(self, indata, frames, time, status):
-        # This silently captures audio frames while the mic is open
+    def audio_callback(self, indata: np.ndarray, frames: int, time, status) -> None:
+        """Audio callback for recording stream. Silently appends audio frames while mic is active.
+        
+        Args:
+            indata: Raw audio input array from sounddevice.
+            frames: Number of frames in this chunk.
+            time: Time information from the audio callback.
+            status: Audio callback status flags.
+        """
         if self.is_recording:
             self.audio_frames.append(indata.copy())
 
     async def action_toggle_mic(self) -> None:
+        """Toggle microphone recording on/off. Opens/closes audio stream and transcribes via Whisper."""
         if self.is_processing:
             return
 
@@ -721,7 +767,11 @@ class KokoAgentApp(App):
             log.scroll_end(animate=False)
         return widget
 
-    async def passive_vision_loop(self):
+    async def passive_vision_loop(self) -> None:
+        """Background loop that periodically captures the user's screen and stores vision data in ChromaDB.
+        
+        Takes a screenshot, compares hash to detect changes, sends to LLM for description, stores in vision DB.
+        """
         if not self.passive_enabled or self.is_processing or not self.vision_collection: return
         now = time.time()
         if now - self.last_passive_time < self.passive_interval: return
@@ -785,7 +835,11 @@ class KokoAgentApp(App):
         except Exception as e:
             self.write_daily_log(f"PASSIVE VISION ERROR: {str(e)}")
 
-    async def telegram_tick(self):
+    async def telegram_tick(self) -> None:
+        """Poll Telegram Bot API for new messages. Handles text, photos, and /flush command.
+        
+        Routes incoming messages to the AI processing pipeline with remote context metadata.
+        """
         if self.is_processing: return
         try:
             url = f"https://api.telegram.org/bot{self.tg_token}/getUpdates"
@@ -855,7 +909,11 @@ class KokoAgentApp(App):
         except:
             pass
 
-    async def gateway_tick(self):
+    async def gateway_tick(self) -> None:
+        """Cron job executor. Checks cron.json for due jobs, fires them to the inbox, and triggers heartbeat processing.
+        
+        Handles both 'interval' and 'daily' job types. Updates next_run timestamps after firing.
+        """
         if self.is_processing: return
         fired_tasks = []
         now = time.time()
@@ -892,7 +950,8 @@ class KokoAgentApp(App):
         except:
             pass
 
-    async def action_refresh_mcp(self):
+    async def action_refresh_mcp(self) -> None:
+        """Refresh and sync all registered MCP server tools."""
         await self.mcp.discover_tools()
         await self.append_to_chat("System tools synchronized.", classes="msg-sys")
 
@@ -1240,7 +1299,13 @@ class KokoAgentApp(App):
             
             
 
-    async def process_command(self, user_text, timestamp):
+    async def process_command(self, user_text: str, timestamp: str) -> None:
+        """Process slash commands (/help, /settings, /models, /mcp, /passive, /clear, /flush, /vram, /voice).
+        
+        Args:
+            user_text: The full command string entered by the user.
+            timestamp: Current time string for logging purposes.
+        """
         parts = user_text.split()
         cmd = parts[0].lower()
         log = self.query_one("#chat_log")
@@ -1371,6 +1436,7 @@ class KokoAgentApp(App):
         else: await self.append_to_chat(f"Unknown command: {cmd}", classes="msg-error")
 
     async def on_chat_text_area_submitted(self, event: ChatTextArea.Submitted) -> None:
+        """Handle text submission from the chat input area. Routes to command processor or AI pipeline."""
         user_text = event.text.strip()
         if not user_text or self.is_processing: return
         try:
@@ -1390,7 +1456,12 @@ class KokoAgentApp(App):
         self.chat_history.append({"role": "user", "content": user_text})
         asyncio.create_task(self.process_ai(timestamp, is_background=False))
 
-    async def _tts_worker_loop(self, queue):
+    async def _tts_worker_loop(self, queue: asyncio.Queue) -> None:
+        """Background TTS worker that converts queued text to audio and sends via Telegram.
+        
+        Args:
+            queue: Async queue of (text, chat_id) tuples to process.
+        """
         while True:
             item = await queue.get()
             if item is None: break
