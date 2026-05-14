@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Dict, Any, Optional
 import re
 import os
 import fnmatch
@@ -18,14 +19,29 @@ class ScanResult(BaseModel):
     risk_level: str
 
 def get_entropy(s: str) -> float:
-    """Calculate Shannon entropy of a string."""
+    """Calculate Shannon entropy of a string to detect high-entropy secrets.
+
+    Args:
+        s: The string to calculate entropy for.
+
+    Returns:
+        Shannon entropy value. Higher values indicate more random/secret-like strings.
+    """
     if not s:
         return 0.0
     probability = [float(s.count(c)) / len(s) for c in set(s)]
     return -sum(p * (2**p) for p in probability if p > 0)
 
 def is_high_entropy(value: str, min_length: int = 16) -> bool:
-    """Check if a value looks like a random secret."""
+    """Check if a value looks like a random secret based on Shannon entropy.
+
+    Args:
+        value: The string value to evaluate.
+        min_length: Minimum length required before checking entropy (default 16).
+
+    Returns:
+        True if the value has high entropy and meets minimum length, False otherwise.
+    """
     if len(value) < min_length:
         return False
     entropy = get_entropy(value)
@@ -49,7 +65,18 @@ SECRET_PATTERNS = {
 }
 
 def scan_file(filepath: str) -> list:
-    """Scan a single file for secrets."""
+    """Scan a single file for hardcoded secrets and API keys using regex patterns.
+
+    Checks against 15+ secret patterns including AWS keys, GitHub tokens, 
+    database passwords, private keys, and more. Also detects high-entropy 
+    variable assignments that look like secrets.
+
+    Args:
+        filepath: Path to the file to scan.
+
+    Returns:
+        List of finding dicts with file, line, type, and match fields.
+    """
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
@@ -97,23 +124,58 @@ def scan_file(filepath: str) -> list:
         return []
 
 def should_ignore(filepath: str, ignore_patterns: list) -> bool:
+    """Check if a file should be ignored based on glob patterns.
+
+    Args:
+        filepath: The file path to check.
+        ignore_patterns: List of glob patterns to match against.
+
+    Returns:
+        True if the file matches any ignore pattern, False otherwise.
+    """
     for pattern in ignore_patterns:
         if fnmatch.fnmatch(filepath, pattern) or fnmatch.fnmatch(os.path.basename(filepath), pattern):
             return True
     return False
 
 def get_depth(path: str, base: str) -> int:
+    """Calculate directory depth relative to a base path.
+
+    Args:
+        path: The full path to measure.
+        base: The base directory to measure from.
+
+    Returns:
+        Integer representing the number of directory levels deep.
+    """
     rel = os.path.relpath(path, base)
     if rel == '.':
         return 0
     return rel.count(os.sep) + 1
 
 @app.get("/health")
-def health():
+def health() -> Dict[str, str]:
+    """Health check endpoint for the SecretScan MCP service.
+
+    Returns:
+        Status dictionary indicating service health.
+    """
     return {"status": "ok", "service": "SecretScan MCP"}
 
 @app.post("/scan", response_model=ScanResult)
-def scan_directory(req: ScanRequest):
+def scan_directory(req: ScanRequest) -> ScanResult:
+    """Scan a directory tree for hardcoded secrets and API keys.
+
+    Walks through the specified directory up to max_depth, skipping ignored patterns,
+    and checks each file against 15+ secret detection patterns including AWS keys,
+    GitHub tokens, database passwords, private keys, and high-entropy values.
+
+    Args:
+        req: ScanRequest containing directory path, max depth, and ignore patterns.
+
+    Returns:
+        ScanResult with findings list, total files scanned, and risk level assessment.
+    """
     if not os.path.isdir(req.directory):
         raise HTTPException(status_code=404, detail=f"Directory not found: {req.directory}")
     

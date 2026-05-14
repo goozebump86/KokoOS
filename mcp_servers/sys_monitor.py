@@ -1,6 +1,7 @@
 import json
 import time
 import asyncio
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import psutil
@@ -9,7 +10,18 @@ app = FastAPI()
 
 sse_clients = []
 
-def call_tool(name, args):
+def call_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a tool call and return the result.
+
+    Currently supports: get_system_stats
+
+    Args:
+        name: The tool name to execute.
+        args: Dictionary of tool arguments.
+
+    Returns:
+        Result dictionary from tool execution.
+    """
     if name == "get_system_stats":
         cpu_percent = psutil.cpu_percent(interval=1)
         mem = psutil.virtual_memory()
@@ -30,7 +42,18 @@ def call_tool(name, args):
         return {"error": f"Unknown tool: {name}"}
 
 @app.get("/sse")
-async def sse_endpoint(request: Request):
+async def sse_endpoint(request: Request) -> StreamingResponse:
+    """Server-Sent Events endpoint for real-time system monitoring.
+
+    Establishes a persistent connection that keeps the client alive.
+    Clients can poll /messages for tool execution results.
+
+    Args:
+        request: The incoming HTTP request.
+
+    Returns:
+        StreamingResponse with SSE data format.
+    """
     async def generate():
         client_id = str(time.time())
         sse_clients.append({'id': client_id, 'closed': False})
@@ -46,7 +69,18 @@ async def sse_endpoint(request: Request):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.post("/messages")
-async def messages(request: Request):
+async def messages(request: Request) -> JSONResponse:
+    """Handle JSON-RPC 2.0 tool calls.
+
+    Accepts tool execution requests and routes them to the appropriate handler.
+    Returns results in JSON-RPC 2.0 format.
+
+    Args:
+        request: The incoming HTTP request containing JSON-RPC payload.
+
+    Returns:
+        JSONResponse with tool execution result in JSON-RPC 2.0 format.
+    """
     body = await request.json()
     
     if body.get("method") == "tools/call":
