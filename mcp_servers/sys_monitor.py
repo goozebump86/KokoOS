@@ -1,3 +1,12 @@
+"""System Monitor MCP Server.
+
+Provides real-time system resource monitoring via a FastAPI-based MCP server.
+Supports JSON-RPC 2.0 tool calls and SSE streaming connections.
+
+Tools:
+    get_system_stats: Returns CPU, RAM, and disk usage statistics.
+"""
+
 import json
 import time
 import asyncio
@@ -6,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import psutil
 
-app = FastAPI()
+app = FastAPI(title="SystemMonitor MCP")
 
 sse_clients = []
 
@@ -95,6 +104,24 @@ async def messages(request: Request) -> JSONResponse:
             }
         }
         return JSONResponse(content=response)
+
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    """Health check endpoint for the SystemMonitor MCP service.
+
+    Returns:
+        Status dictionary indicating service health.
+    """
+    return {"status": "ok", "service": "SystemMonitor MCP"}
+
+@app.get("/")
+async def read_root() -> Dict[str, str]:
+    """Root health check endpoint.
+
+    Returns:
+        Status dictionary indicating service is running.
+    """
+    return {"message": "SystemMonitor MCP is running"}
 
 if __name__ == "__main__":
     import uvicorn
