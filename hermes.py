@@ -353,16 +353,79 @@ class KokoAgentApp(App):
                 }
             })
 
-    def load_settings(self) -> Dict[str, Any]:
-        """Load application settings from settings.json.
+    def validate_settings(self, settings: Dict[str, Any]) -> List[str]:
+        """Validate application settings and return a list of warnings.
+
+        Args:
+            settings: Dictionary of settings to validate.
 
         Returns:
-            Dictionary of settings, or empty dict on failure.
+            List of warning strings. Empty list means all settings are valid.
+        """
+        warnings = []
+        
+        # Check LLM settings
+        llm = settings.get("llm_settings", {})
+        if not llm.get("api_base"):
+            warnings.append("[WARN] LLM api_base is empty — local inference will fail.")
+        if not llm.get("model"):
+            warnings.append("[WARN] LLM model name is empty — default will be used.")
+        
+        # Check Gemini settings
+        gemini = settings.get("gemini_settings", {})
+        if gemini.get("api_key") and gemini["api_key"] == "YOUR_GEMINI_API_KEY":
+            warnings.append("[WARN] Gemini API Key still set to default — Gemini engine will not work.")
+        
+        # Check memory directory
+        mem = settings.get("memory", {})
+        if not mem.get("memory_dir"):
+            warnings.append("[WARN] Memory directory path is empty — using default 'memory'.")
+        
+        # Check Telegram settings (non-fatal)
+        tel = settings.get("telecom", {})
+        if settings.get("active_engine") != "local":
+            if not gemini.get("api_key") or gemini["api_key"] == "YOUR_GEMINI_API_KEY":
+                warnings.append("[WARN] Active engine is 'gemini' but no API key is set.")
+        
+        # Check MCP servers (non-fatal)
+        mcp_servers = settings.get("mcp_servers", [])
+        if not mcp_servers:
+            warnings.append("[INFO] No MCP servers configured — only native tools available.")
+        
+        return warnings
+
+    def load_settings(self) -> Dict[str, Any]:
+        """Load and validate application settings from settings.json.
+
+        Returns:
+            Dictionary of validated settings, or empty dict on failure.
         """
         try:
             with open("settings.json", "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
+                raw = json.load(f)
+            warnings = self.validate_settings(raw)
+            if warnings:
+                for w in warnings:
+                    print(w)
+            return raw
+        except FileNotFoundError:
+            print("[WARN] settings.json not found — creating defaults.")
+            defaults = {
+                "active_engine": "local",
+                "llm_settings": {"api_base": "http://localhost:8080/v1", "api_key": "local", "model": "qwen-35b", "max_tokens": 128000},
+                "gemini_settings": {"api_key": "", "model": "gemini-1.5-pro", "api_base": "https://generativelanguage.googleapis.com/v1beta/openai/"},
+                "memory": {"memory_dir": "memory", "heartbeat_file": "heartbeat.md"},
+                "gateway": {"enabled": False, "tick_rate_seconds": 60},
+                "telecom": {"telegram_enabled": False, "bot_token": "", "allowed_chat_ids": []},
+                "sub_agents": {"enabled": True},
+                "mcp_servers": []
+            }
+            with open("settings.json", "w", encoding="utf-8") as f:
+                json.dump(defaults, f, indent=4)
+            return defaults
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] settings.json is corrupt: {e}")
+            print("[INFO] Creating fresh defaults. Backup old file manually.")
             return {}
 
     def setup_openclaw_fs(self) -> None:
@@ -544,28 +607,36 @@ class KokoAgentApp(App):
         self.abort_flag = True
 
     def action_request_quit(self) -> None:
-        """Request application shutdown with confirmation modal."""
+        """Request application shutdown with confirmation and graceful cleanup."""
         def check_quit(quit_confirmed: bool):
             if quit_confirmed:
                 self.abort_flag = True 
                 
+                # Graceful cleanup sequence
+                cleanup_tasks = []
+                
+                # Close audio stream if recording
                 if getattr(self, 'is_recording', False) and getattr(self, 'audio_stream', None):
                     try:
                         self.audio_stream.stop()
                         self.audio_stream.close()
                     except: pass
-                    
-                self.exit() 
                 
-                # The ultimate failsafe: Force ANSI terminal reset before killing the zombie
-                def force_exit():
+                # Save state before exit
+                self.save_context_cache()
+                
+                # Schedule terminal reset after exit
+                def graceful_shutdown():
                     import os, sys
+                    time.sleep(0.5)  # Give UI time to close
                     sys.stdout.write("\033[?1049l\033[?1000l\033[?1003l\033[?1006l\033[?1015l\033[?25h")
                     sys.stdout.flush()
                     os._exit(0)
                     
                 import threading
-                threading.Timer(1.5, force_exit).start() 
+                threading.Timer(1.5, graceful_shutdown).start() 
+                
+                self.exit() 
         self.push_screen(QuitModal(), check_quit)
 
     def action_command_settings(self) -> None:
