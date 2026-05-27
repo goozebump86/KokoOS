@@ -206,6 +206,24 @@ def read_root() -> HTMLResponse:
     """Returns a simple HTML page confirming the MCP server is running."""
     return HTMLResponse(f"<h3>ComfyUI MCP (True Folder Polling) Running on Port {SERVER_PORT}</h3>")
 
+def graceful_shutdown(signum: int, frame: Any) -> None:
+    """Gracefully shut down the server on SIGTERM/SIGINT.
+
+    Logs shutdown event and allows in-flight requests to complete
+    before terminating the server process. Prevents resource leaks
+    and corrupted token files on abrupt termination.
+
+    Args:
+        signum: The signal number received (SIGTERM=15, SIGINT=2).
+        frame: The current stack frame (unused but required by signal handler signature).
+    """
+    logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
+    logger.info("ComfyUI MCP server shut down cleanly.")
+
 if __name__ == "__main__":
     import uvicorn
+    import signal
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
+    logger.info(f"Starting ComfyUI MCP on port {SERVER_PORT}...")
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)

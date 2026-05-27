@@ -57,9 +57,9 @@ def function_store_memory(concept: Optional[str] = None, details: Optional[str] 
             metadatas=[{"concept": concept, "timestamp": timestamp}],
             ids=[memory_id]
         )
-        return f"✅ Memory successfully etched into the neural net.\nConcept: '{concept}'\nID: {memory_id}"
+        return f"[OK] Memory successfully etched into the neural net.\nConcept: '{concept}'\nID: {memory_id}"
     except Exception as e:
-        return f"❌ Failed to store memory: {str(e)}"
+        return f"[ERROR] Failed to store memory: {str(e)}"
 
 def function_semantic_search(query: Optional[str] = None, n_results: Optional[int] = 3) -> str:
     """Searches the database mathematically for the closest matching memories.
