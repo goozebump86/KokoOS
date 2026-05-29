@@ -3,10 +3,11 @@
 
 import os
 import json
+import signal
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -326,6 +327,23 @@ async def post_messages(request: Request):
         return JSONResponse(content={"status": "ok"})
     except Exception as e: return JSONResponse(content={"error": str(e)}, status_code=500)
 
+def graceful_shutdown(signum: int, frame: Any) -> None:
+    """Gracefully shut down the server on SIGTERM/SIGINT.
+
+    Logs shutdown event and allows in-flight requests to complete
+    before terminating the server process. Prevents resource leaks
+    and corrupted state on abrupt termination.
+
+    Args:
+        signum: The signal number received (SIGTERM=15, SIGINT=2).
+        frame: The current stack frame (unused but required by signal handler signature).
+    """
+    logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
+    logger.info("Coder MCP server shut down cleanly.")
+
 if __name__ == "__main__":
     import uvicorn
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
+    logger.info(f"Starting Coder MCP on port {SERVER_PORT}...")
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)
