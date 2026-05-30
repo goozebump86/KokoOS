@@ -8,6 +8,8 @@ import logging
 import os
 import glob
 import time
+import signal
+import sys
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
@@ -294,6 +296,25 @@ def read_root() -> HTMLResponse:
     """Returns a simple HTML page confirming the MCP server is running."""
     return HTMLResponse(f"<h3>ComfyUI Audio Gen MCP (XL Turbo) Running on Port {SERVER_PORT}</h3>")
 
+# --- GRACEFUL SHUTDOWN ---
+def graceful_shutdown(signum, frame):
+    """Handles SIGTERM/SIGINT for clean shutdown."""
+    logger.info(f"ComfyUIAudio MCP received signal {signum}. Shutting down gracefully...")
+    try:
+        # Flush ComfyUI VRAM before exiting
+        requests.post(f"http://{COMFY_ADDR}/free", json={"unload_models": True, "free_memory": True}, timeout=5)
+        logger.info("ComfyUI VRAM flushed on shutdown.")
+    except Exception as e:
+        logger.warning(f"Failed to flush VRAM during shutdown: {e}")
+    sys.exit(0)
+
+
 if __name__ == "__main__":
     import uvicorn
+    
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
+    
+    logger.info(f"ComfyUIAudio MCP starting on port {SERVER_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)
